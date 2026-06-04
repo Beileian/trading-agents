@@ -1,6 +1,6 @@
 #!/bin/bash
 # TradingAgents 每日收盘自动分析 + 推送到「谈股论金奔富」群
-# 触发: 每个交易日 15:30 CST
+# 触发: 每个交易日 08:55 CST (开盘前5分钟)
 # 数据: 新浪财经(OHLCV) + IMA 知识库(观点) + DeepSeek(分析)
 # 目标: cidY4mlx+J2kNFpTiWFgQ0gkg==
 
@@ -105,7 +105,7 @@ OPINIONS_FILE="$REPORT_DIR/opinions_${DATE_TAG}.md"
 FINAL_FILE="$REPORT_DIR/daily_report_${DATE_TAG}.md"
 
 {
-    echo "# 📊 A股收盘分析 · $(TZ=Asia/Shanghai date +%Y%m%d)"
+    echo "# 📊 A股开盘前分析 · $(TZ=Asia/Shanghai date +%Y%m%d)"
     echo ""
     echo "> 自动生成 | 数据: 新浪财经 + IMA知识库 | 分析: DeepSeek"
     echo "> 免责声明: AI模拟分析，不构成投资建议"
