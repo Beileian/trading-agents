@@ -1,8 +1,8 @@
 #!/bin/bash
 # TradingAgents 每日收盘自动分析 + 推送到「谈股论金奔富」群
-# 触发: 每个交易日 08:55 CST (开盘前5分钟)
+# 触发: 每个交易日 08:55 CST | 推送格式: AICard Markdown 表格
 # 数据: 新浪财经(OHLCV) + IMA 知识库(观点) + DeepSeek(分析)
-# 目标: cidY4mlx+J2kNFpTiWFgQ0gkg==
+# 目标: cidY4mlx+J2kNFpTiWFgQ0gkg== | 模式: aicard (groupReplyMode)
 
 set -euo pipefail
 
