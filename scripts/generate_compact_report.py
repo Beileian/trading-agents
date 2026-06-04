@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
-生成群聊卡片推送用的精简分析报告。
-手机阅读优化：顶部结论 → 关键数据 → 外部观点
+生成群聊推送用的 Markdown 表格分析报告。
+格式: 顶部标题 → 数据表格 → 趋势摘要 → 观点摘要 → 免责
 """
 
 import sys, os, re
@@ -16,8 +16,7 @@ def extract_table_val(section, key):
         line = line.strip()
         if key in line and line.startswith('|') and line.endswith('|'):
             parts = [p.strip() for p in line.split('|')]
-            # The value is the second non-empty part (after the key)
-            vals = [p for p in parts[2:] if p]  # skip leading empty + key
+            vals = [p for p in parts[2:] if p]
             if vals:
                 return vals[0]
     return '-'
@@ -52,15 +51,10 @@ def main():
     current_section = []
     
     for line in analysis.split('\n'):
-        if line.startswith('### ') and '.SH' in line:
+        if line.startswith('### ') and len(line.split()) >= 2 and any(x in line.split()[1] for x in ['.SH', '.SS']):
             if current_symbol:
                 sections[current_symbol] = '\n'.join(current_section)
-            current_symbol = line.split('### ')[1].split(' —')[0].strip()
-            current_section = [line]
-        elif line.startswith('### ') and '.SS' in line:
-            if current_symbol:
-                sections[current_symbol] = '\n'.join(current_section)
-            current_symbol = line.split('### ')[1].split(' —')[0].strip()
+            current_symbol = line.split()[1].strip()
             current_section = [line]
         elif current_symbol:
             current_section.append(line)
@@ -68,13 +62,14 @@ def main():
     if current_symbol:
         sections[current_symbol] = '\n'.join(current_section)
     
-    # ── Build report ──
+    # ── Build Markdown report ──
     lines = []
-    lines.append(f"📊 A股开盘前分析 · {date_str}")
+    lines.append(f"## 📊 A股开盘前分析 · {date_str}")
     lines.append("")
     
-    lines.append("━━━ 技术面速览 ━━━")
-    lines.append("")
+    # Data table
+    lines.append("| 标的 | 最新价 | RSI | 年内涨跌 | 趋势 | 建议 |")
+    lines.append("|------|--------|-----|----------|------|------|")
     
     ticker_order = [
         ("000016.SH", "上证50"),
@@ -87,81 +82,82 @@ def main():
     ]
     
     sell_count = hold_count = buy_count = 0
-    signals = []
     
     for symbol, name in ticker_order:
         sec = sections.get(symbol, '')
         if not sec:
-            lines.append(f"  ⚠ {name}: 数据缺失")
+            lines.append(f"| {name} | - | - | - | ⚠️ | 数据缺失 |")
             continue
         
-        price = extract_table_val(sec, '最新价')
+        price = extract_table_val(sec, '最新价').strip('¥').strip()
         rsi = extract_table_val(sec, 'RSI')
         ytd = extract_table_val(sec, '年内涨跌')
         trend = extract_decision_val(sec, '趋势判断')
         advice = extract_decision_val(sec, '交易建议')
         pos = extract_decision_val(sec, '建议仓位')
         
-        trend_icon = "📉" if "跌" in trend else "📊" if "震荡" in trend else "📈"
+        if "看跌" in trend:
+            trend_icon = "📉看跌"
+        elif "看涨" in trend:
+            trend_icon = "📈看涨"
+        else:
+            trend_icon = "📊震荡"
         
         if "卖出" in advice:
-            adv = "🔴卖出"
+            advice_icon = "🔴卖出"
             sell_count += 1
         elif "买入" in advice:
-            adv = "🟢买入"
+            advice_icon = "🟢买入"
             buy_count += 1
         else:
-            adv = "🟡持有"
+            advice_icon = "🟡持有"
             hold_count += 1
         
-        line = f"{trend_icon} **{name}** ¥{price} | RSI {rsi} | YTD {ytd} | {adv} {pos}"
-        lines.append(line)
-        signals.append((name, trend, advice, pos))
+        lines.append(f"| {name} | ¥{price} | {rsi} | {ytd} | {trend_icon} | {advice_icon} |")
     
     lines.append("")
-    lines.append("━━━ 今日关注 ━━━")
-    lines.append("")
+    lines.append(f"🔴 偏空 {sell_count}只 | 🟡 震荡 {hold_count}只 | 🟢 偏多 {buy_count}只")
     
+    # Key signals
     if sell_count:
-        lines.append(f"🔴 偏空: {sell_count}只（上证50、农业银行）— 跌破所有均线")
-    if buy_count:
-        lines.append(f"🟢 偏多: {buy_count}只")
-    if hold_count >= 5:
-        lines.append(f"📊 多数震荡 ({hold_count}/7) — 观望为主")
-    else:
-        lines.append(f"📊 震荡 {hold_count}只 | 偏空 {sell_count}只 | 偏多 {buy_count}只")
+        bears = [f"**{n}**" for s, n in ticker_order 
+                 if "卖出" in extract_decision_val(sections.get(s, ''), '交易建议')]
+        lines.append(f"⚠️ 卖出信号: {', '.join(bears)}")
     
     lines.append("")
-    lines.append("━━━ 外部观点 ━━━")
-    lines.append("")
     
+    # IMA opinions (compact)
     if os.path.exists(opinions_file):
         with open(opinions_file) as f:
             op_text = f.read()
-        # Extract high-weight titles
-        found = 0
+        # Find high-weight entries
+        high_weights = []
         for line in op_text.split('\n'):
-            if 'w=1.00' in line and '**' in line:
-                title = line.split('**')[1].split('**')[0] if '**' in line else line[:60]
-                lines.append(f"  🔥 {title}")
-                found += 1
-            elif 'w=0.85' in line and '**' in line and found < 4:
-                title = line.split('**')[1].split('**')[0] if '**' in line else line[:60]
-                lines.append(f"  ⭐ {title}")
-                found += 1
-            if found >= 4:
+            for w_str in ['w=1.00', 'w=0.85']:
+                if w_str in line and '**' in line:
+                    parts = line.split('**')
+                    if len(parts) >= 3:
+                        title = parts[1].strip().strip('*').strip()
+                        if title and title not in [t for _, t in high_weights]:
+                            high_weights.append((w_str, title))
+                            break
+            if len(high_weights) >= 3:
                 break
-    else:
-        lines.append("  今日无IMA观点更新")
+        
+        if high_weights:
+            lines.append("**今日高权重观点**")
+            for w, title in high_weights:
+                icon = "🔥" if "1.00" in w else "⭐"
+                lines.append(f"- {icon} {title}")
+            lines.append("")
     
     lines.append("")
-    lines.append("━━━━━━━━━━━━━━━")
-    lines.append("⚠️ AI模拟分析 · 不构成投资建议")
-    lines.append(f"🕐 {datetime.now(TZ).strftime('%m-%d %H:%M')} · DeepSeek-chat")
+    lines.append("> ⚠️ AI模拟分析 · 不构成投资建议")
+    lines.append(f"> 🕐 {datetime.now(TZ).strftime('%m-%d %H:%M')} · DeepSeek-chat")
     
     report = '\n'.join(lines)
     
-    output_file = f"{PROJECT_DIR}/reports/compact_report_{date_str}.txt"
+    output_file = f"{PROJECT_DIR}/reports/compact_report_{date_str}.md"
     with open(output_file, 'w') as f:
         f.write(report)
     
