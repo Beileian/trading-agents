@@ -324,13 +324,11 @@ def generate_opinion_section(sources: dict) -> str:
             lines.append(f"**{title}** [{date}] w={w:.2f} {w_tag}\n")
             
             if src_key == '暮云思辨':
-                # 暮云文章保留完整段落，不做缩减
-                lines.append(f"> {opinion.replace(chr(10), chr(10)+'> ')}\n")
+                # 暮云文章：提炼中心思想 + 金句引用
+                lines.append(f"{opinion}\n")
             else:
                 # 二小姐/EarlETF 提取核心观点
                 lines.append(f"> {opinion[:300]}\n")
-    
-    lines.append("\n---\n")
     lines.append("*以上观点来自 IMA 知识库已保存的公众号文章，不代表投资建议。*\n")
     
     return '\n'.join(lines)
