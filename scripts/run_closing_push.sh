@@ -1,0 +1,49 @@
+#!/bin/bash
+# ============================================================================
+# A股收盘复盘 — 一站式执行+推送脚本（含降级兜底）
+# 用法: ./run_closing_push.sh
+# ============================================================================
+set -euo pipefail
+export TZ=Asia/Shanghai
+DATE_TAG=$(date +%Y%m%d)
+DATE_STR=$(date +%Y-%m-%d)
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+PROJECT_DIR="$(dirname "$SCRIPT_DIR")"
+REPORT_DIR="$PROJECT_DIR/reports"
+PUSH_SCRIPT="/root/.openclaw/workspace/projects/overseas-morning-brief/scripts/send_to_dingtalk.py"
+
+# 失败告警
+trap 'exit_code=$?; echo "# ⚠️ 收盘复盘异常\n\n脚本 exit=$exit_code\n时间: $(TZ=Asia/Shanghai date +%Y-%m-%d\\ %H:%M:%S)" | python3 "$PUSH_SCRIPT" 2>/dev/null' ERR
+
+echo "=== A股收盘复盘 $DATE_STR ==="
+
+# 步骤1: 运行收盘复盘
+echo "[1/2] 运行收盘复盘..."
+/usr/bin/python3 "$SCRIPT_DIR/closing_review.py" 2>&1 || {
+    echo "[WARN] 收盘复盘脚本失败，使用降级推送"
+}
+
+# 步骤2: 推送（含降级）
+REVIEW_FILE="$REPORT_DIR/closing_review_${DATE_TAG}.md"
+
+if [ -f "$REVIEW_FILE" ] && [ -s "$REVIEW_FILE" ]; then
+    echo "[2/2] 复盘报告推送中..."
+    cat "$REVIEW_FILE" | python3 "$PUSH_SCRIPT"
+else
+    echo "[2/2] 复盘文件缺失，推送降级简报..."
+    # 降级方案：推送简单收盘提醒
+    cat << EOF | python3 "$PUSH_SCRIPT"
+# 📉 A股收盘复盘 · ${DATE_STR}
+
+⚠️ 复盘脚本未能生成报告。
+
+请手动检查：
+- closing_review.py 执行日志
+- API key 是否有效
+- 网络连接是否正常
+
+*降级推送 | 认知闭环 v1*
+EOF
+fi
+
+echo "=== 完成 ==="

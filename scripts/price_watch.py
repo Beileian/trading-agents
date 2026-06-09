@@ -2,34 +2,34 @@
 """
 盘中价格监控 — 实时比价支撑/阻力位，穿越时推送提醒到「谈股论金奔富」群。
 触发: cron 每 5 分钟 (09:30-11:30, 13:00-15:00)
-数据: 智兔数服实时快照
+数据: 新浪财经实时行情（主） + 智兔数服（备份）
 """
 
-import os, json, subprocess, requests
+import os, json, re, subprocess, requests, sys
 from datetime import datetime, timezone, timedelta
 
 TZ = timezone(timedelta(hours=8))
 PROJECT_DIR = "/root/.openclaw/workspace/projects/trading-agents"
+OPENCLAW_BIN = "/root/.nvm/versions/node/v22.22.0/bin/openclaw"
 
-# 今日交易推荐表（由开盘前分析生成）
 SIGNALS_FILE = f"{PROJECT_DIR}/reports/trade_signals_{datetime.now(TZ).strftime('%Y%m%d')}.md"
 
-# 智兔 API 配置
+# 新浪 API 标的映射：代码 → (sina_code, 名称)
+SINA_MAP = {
+    "sh000016": ("000016", "上证50"),
+    "sh000300": ("000300", "沪深300"),
+    "sh000688": ("000688", "科创50"),
+    "sh601288": ("601288", "农业银行"),
+    "sh601988": ("601988", "中国银行"),
+    "sh600036": ("600036", "招商银行"),
+    "sh600795": ("600795", "国电电力"),
+    "sz000066": ("000066", "中国长城"),
+    "sh600562": ("600562", "国睿科技"),
+}
+
+# 智兔 API（备份）
 ZHITU_BASE = "https://api.zhituapi.com"
 ZHITU_TOKEN = "B0794D…73A9"
-
-# 标的映射：代码 → 名称
-WATCHLIST = {
-    "000016": "上证50",
-    "000300": "沪深300",
-    "000688": "科创50",
-    "601288": "农业银行",
-    "601988": "中国银行",
-    "600036": "招商银行",
-    "600795": "国电电力",
-    "000066": "中国长城",
-    "600562": "国睿科技",
-}
 
 def load_thresholds():
     """从今日交易推荐报告提取支撑/阻力位"""
@@ -43,41 +43,89 @@ def load_thresholds():
             if not line.startswith('|') or '标的' in line or '---' in line:
                 continue
             parts = [p.strip() for p in line.split('|')]
-            if len(parts) < 6:
+            if len(parts) < 8:
                 continue
             name = parts[1]
-            # columns: 标的 | 现价 | 乖离 | 支撑 | 阻力 | 操作 | 仓位 | 触发条件
-            if len(parts) >= 6:
-                support = parts[4]
-                resistance = parts[5]
-                try:
-                    sup_val = float(support)
-                    res_val = float(resistance)
-                    thresholds[name] = {'support': sup_val, 'resistance': res_val}
-                except ValueError:
-                    pass
+            support = parts[4]
+            resistance = parts[5]
+            try:
+                thresholds[name] = {
+                    'support': float(support),
+                    'resistance': float(resistance)
+                }
+            except ValueError:
+                pass
     return thresholds
 
-def fetch_prices():
-    """从智兔获取实时价格"""
+def fetch_sina_prices():
+    """从新浪财经获取实时价格（免费，无限额）"""
     prices = {}
-    for code, name in WATCHLIST.items():
+    sina_codes = list(SINA_MAP.keys())
+    
+    for i in range(0, len(sina_codes), 3):
+        batch = sina_codes[i:i+3]
+        url = "http://hq.sinajs.cn/list=" + ",".join(batch)
+        try:
+            resp = requests.get(url, headers={"Referer": "https://finance.sina.com.cn"}, timeout=5)
+            resp.encoding = "gbk"
+            
+            for line in resp.text.strip().split("\n"):
+                match = re.search(r'hq_str_(\w+)="(.+)"', line)
+                if not match:
+                    continue
+                sina_code = match.group(1)
+                fields = match.group(2).split(",")
+                
+                if sina_code not in SINA_MAP or len(fields) < 6:
+                    continue
+                
+                code, name = SINA_MAP[sina_code]
+                
+                if sina_code.startswith("sh0") or sina_code.startswith("sz3"):  # 指数
+                    price = float(fields[1])
+                    prev_close = float(fields[2])
+                    high = float(fields[4])
+                    low = float(fields[5])
+                else:  # 个股
+                    price = float(fields[3]) if fields[3] != '0.000' else float(fields[1])
+                    prev_close = float(fields[2])
+                    high = float(fields[4])
+                    low = float(fields[5])
+                
+                change_pct = (price - prev_close) / prev_close * 100 if prev_close != 0 else 0
+                
+                prices[name] = {
+                    'price': price,
+                    'change_pct': round(change_pct, 2),
+                    'high': high,
+                    'low': low,
+                    'prev_close': prev_close,
+                }
+        except Exception as e:
+            print(f"[sina batch error] {batch}: {e}", file=sys.stderr)
+    
+    return prices
+
+def fetch_zhitu_prices():
+    """从智兔获取实时价格（备份）"""
+    prices = {}
+    for code, (_, name) in SINA_MAP.items():
         try:
             resp = requests.get(
-                f"{ZHITU_BASE}/hs/quote/{code}",
+                f"{ZHITU_BASE}/hs/quote/{code.replace('sh','').replace('sz','')}",
                 params={"token": ZHITU_TOKEN},
                 timeout=5
             )
             if resp.status_code == 200:
                 data = resp.json()
                 if data.get('code') == 0 and 'data' in data:
-                    quote = data['data']
+                    q = data['data']
                     prices[name] = {
-                        'price': float(quote.get('close', quote.get('price', 0))),
-                        'change_pct': float(quote.get('changePercent', quote.get('change_percent', 0))),
-                        'high': float(quote.get('high', 0)),
-                        'low': float(quote.get('low', 0)),
-                        'volume': quote.get('volume', ''),
+                        'price': float(q.get('close', q.get('price', 0))),
+                        'change_pct': float(q.get('changePercent', 0)),
+                        'high': float(q.get('high', 0)),
+                        'low': float(q.get('low', 0)),
+                        'prev_close': 0,
                     }
         except:
             pass
@@ -93,7 +141,6 @@ def check_breaches(prices, thresholds):
         support = t['support']
         resistance = t['resistance']
 
-        # 跌破支撑
         if price <= support:
             gap = (support - price) / price * 100
             alerts.append({
@@ -102,7 +149,6 @@ def check_breaches(prices, thresholds):
                 'msg': f"🔴 {name} 跌破支撑 {support}（现价 {price:.2f}，破位 {gap:.1f}%）"
             })
 
-        # 突破阻力
         if price >= resistance:
             gap = (price - resistance) / resistance * 100
             alerts.append({
@@ -129,7 +175,7 @@ def dedup_alerts(alerts):
     for a in alerts:
         key = f"{a['name']}_{a['type']}"
         last_time = state.get(key, 0)
-        if now - last_time > 30 * 60:  # 30分钟冷却
+        if now - last_time > 30 * 60:
             state[key] = now
             new_alerts.append(a)
 
@@ -144,9 +190,7 @@ def push_alerts(alerts):
         return
 
     chat_id = "cidY4mlx+J2kNFpTiWFgQ0gkg=="
-    lines = []
-    lines.append("## ⚡ 盘中价格预警")
-    lines.append("")
+    lines = ["## ⚡ 盘中价格预警", ""]
     for a in alerts:
         lines.append(f"- {a['msg']}")
 
@@ -154,7 +198,7 @@ def push_alerts(alerts):
 
     try:
         subprocess.run([
-            'openclaw', 'message', 'send',
+            OPENCLAW_BIN, 'message', 'send',
             '--channel', 'dingtalk-connector',
             '--target', f'chat:{chat_id}',
             '--message', msg,
@@ -170,15 +214,19 @@ def main():
     morning = t >= datetime.strptime("09:30", "%H:%M").time() and t <= datetime.strptime("11:30", "%H:%M").time()
     afternoon = t >= datetime.strptime("13:00", "%H:%M").time() and t <= datetime.strptime("15:00", "%H:%M").time()
     if not morning and not afternoon:
-        return  # 非交易时段，静默退出
+        return
 
     thresholds = load_thresholds()
     if not thresholds:
-        return  # 今日报告未生成
+        return
 
-    prices = fetch_prices()
+    # 主数据源：新浪
+    prices = fetch_sina_prices()
     if not prices:
-        return  # 行情获取失败
+        # 备用：智兔
+        prices = fetch_zhitu_prices()
+    if not prices:
+        return
 
     alerts = check_breaches(prices, thresholds)
     new_alerts = dedup_alerts(alerts)

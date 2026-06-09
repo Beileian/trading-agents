@@ -1,0 +1,39 @@
+============================================================
+TradingAgents 自动分析 — 2026-06-08 08:55:01 CST
+============================================================
+
+=== 更新数据缓存 ===
+
+=== 生成技术分析报告 ===
+
+=== 提取 IMA 知识库观点 ===
+============================================================
+IMA 金融观点提取 — 2026-06-08 08:55
+============================================================
+
+找到 0 篇金融相关文章（最近7天）
+
+
+✓ 观点缓存已写入: /root/.openclaw/workspace/projects/trading-agents/reports/opinions_20260608.md
+  总计: 0 篇文章
+
+=== 提取外盘晨间研判信号 ===
+外盘信号提取完成: /root/.openclaw/workspace/projects/overseas-morning-brief/reports/overseas_signal_2026-06-08.md
+  方向: 偏空
+  信号数: 4
+  异常: 2 条
+
+=== 合并报告 ===
+
+=== 生成交易推荐表格 ===
+❌ 报告未找到: /root/.openclaw/workspace/projects/trading-agents/reports/trading_analysis_20260608.md
+⚠ 交易推荐表格生成失败
+报告生成: /root/.openclaw/workspace/projects/trading-agents/reports/daily_report_20260608.md (1264 bytes)
+
+=== 推送到群 ===
+/root/.local/share/pnpm/openclaw: line 20: exec: node: not found
+✗ 推送失败
+
+============================================================
+完成 — 2026-06-08 08:55:02 CST
+============================================================

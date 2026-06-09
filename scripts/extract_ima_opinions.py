@@ -267,8 +267,10 @@ def main():
         print(f"  {opinion[:120]}...")
         print()
     
-    # 4. 生成报告章节
-    report = generate_opinion_section(sources)
+    # 4. 生成报告章节（只包含三个有价值来源，过滤"其他"）
+    # 将"其他"来源过滤掉（聊天记录、AI技术文章等与金融无关的内容）
+    sources_filtered = {k: v for k, v in sources.items() if k != '其他'}
+    report = generate_opinion_section(sources_filtered)
     
     # 5. 写入缓存文件
     os.makedirs(REPORT_DIR, exist_ok=True)
@@ -323,12 +325,11 @@ def generate_opinion_section(sources: dict) -> str:
             
             lines.append(f"**{title}** [{date}] w={w:.2f} {w_tag}\n")
             
-            if src_key == '暮云思辨':
-                # 暮云文章：提炼中心思想 + 金句引用
-                lines.append(f"{opinion}\n")
-            else:
-                # 二小姐/EarlETF 提取核心观点
-                lines.append(f"> {opinion[:300]}\n")
+            # 所有来源统一：标题 + 一句话摘要，截断到 300 字符
+            opinion_short = opinion[:300]
+            if len(opinion) > 300:
+                opinion_short = opinion[:297] + "..."
+            lines.append(f"> {opinion_short}\n")
     lines.append("*以上观点来自 IMA 知识库已保存的公众号文章，不代表投资建议。*\n")
     
     return '\n'.join(lines)
