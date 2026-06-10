@@ -484,6 +484,84 @@ def update_cognition_state(prices, thresholds, overseas_dir, overseas_conf):
     with open(state_file, "w") as f:
         json.dump(state, f, indent=2, ensure_ascii=False)
 
+    # ── 追加报告索引行 ──
+    index_file = f"{PROJECT_DIR}/reports/INDEX.md"
+    index_date = NOW.strftime('%Y-%m-%d')
+    index_weekday = ["周一","周二","周三","周四","周五","周六","周日"][NOW.weekday()]
+
+    # Build index entry
+    op_counts = {"sell": 0, "hold": 0, "buy": 0}
+    for n in ALL_NAMES:
+        if n in thresholds:
+            op = thresholds[n].get("op", "")
+            if op == "sell": op_counts["sell"] += 1
+            elif op == "buy": op_counts["buy"] += 1
+            else: op_counts["hold"] += 1
+    op_str = f"{op_counts['sell']}卖出/{op_counts['hold']}持有"
+    if op_counts['buy'] > 0:
+        op_str += f"/{op_counts['buy']}买入"
+
+    # Overseas
+    overseas_str = overseas_dir or "--"
+    if overseas_actual and overseas_match:
+        overseas_str += f" → 实际{overseas_actual} {overseas_match}"
+
+    # Sell wrong
+    sell_str = ""
+    if sell_wrong:
+        sw = ",".join(sell_wrong)
+    sell_str = f" | 卖出误判 {sw}"
+
+    # Breach
+    breach_str = ""
+    if breach_names:
+        bn = ",".join(breach_names)
+    breach_str = f" | 触发穿越{breach_count}条（{bn}）"
+
+    index_line = f"- [交易推荐](trade_signals_{TODAY_TAG}.md) — {op_str} | 外盘{overseas_str}{sell_str}{breach_str}"
+
+    if os.path.exists(index_file):
+        with open(index_file) as f:
+            lines = f.readlines()
+        # 找到"## {index_date}" 或插入新日期块
+        new_lines = []
+        date_header = f"## {index_date} {index_weekday}"
+        found = False
+        for i, line in enumerate(lines):
+            if line.strip() == date_header:
+                # 日期块已存在，追加报告行在交易推荐后
+                new_lines.append(line)
+                found = True
+                continue
+            if found and line.startswith("- [收盘复盘]"):
+                # 已经有收盘复盘行，跳过
+                new_lines.append(line)
+                continue
+            new_lines.append(line)
+        if not found:
+            # 插入到"## "开头的第一行之前（日期倒序）
+            inserted = False
+            for i, line in enumerate(new_lines):
+                if line.startswith("## 202") and not inserted:
+                    new_lines.insert(i, f"{date_header}\n\n{index_line}\n")
+                    inserted = True
+            if not inserted:
+                new_lines.append(f"\n{date_header}\n\n{index_line}\n")
+    else:
+        new_lines = [
+            "# 托董交易推荐系统 · 报告索引\n",
+            "\n",
+            "> 自动维护，每日收盘复盘时追加。点击文件名打开完整报告。\n",
+            "\n",
+            f"{date_header}\n",
+            "\n",
+            f"{index_line}\n",
+            "\n",
+        ]
+
+    with open(index_file, "w") as f:
+        f.writelines(new_lines)
+
     return hint
 
 

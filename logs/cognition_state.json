@@ -1,34 +1,48 @@
 {
-  "last_updated": null,
-  "last_trade_date": null,
+  "last_updated": "2026-06-10T22:39:43.148898+08:00",
+  "last_trade_date": "20260610",
   "metrics": {
     "overseas_direction_accuracy": {
-      "history": [],
-      "rolling_5d": null,
-      "label": "neutral"
+      "history": [
+        0
+      ],
+      "rolling_5d": 0.0,
+      "label": "unreliable"
     },
     "sell_misrate": {
-      "history": [],
-      "rolling_3d": null,
-      "label": "neutral"
+      "history": [
+        0.2
+      ],
+      "rolling_3d": 0.2,
+      "label": "high_efficiency"
     },
     "breach_hit_rate": {
-      "history": [],
-      "rolling_3d": null,
-      "label": "neutral"
+      "history": [
+        3
+      ],
+      "rolling_3d": 3.0,
+      "label": "high_signal"
     }
   },
   "last_review": {
-    "date": null,
-    "overseas_predicted": null,
-    "overseas_actual": null,
-    "direction_match": null,
-    "sell_wrong_count": 0,
-    "sell_wrong_names": [],
-    "breach_count": 0,
-    "breach_names": [],
-    "extreme_stocks": [],
-    "cognitive_tag": null,
-    "calibration_hint": null
+    "date": "20260610",
+    "overseas_predicted": "中性/分歧",
+    "overseas_actual": "震荡",
+    "direction_match": "偏离",
+    "sell_wrong_count": 1,
+    "sell_wrong_names": [
+      "农业银行"
+    ],
+    "breach_count": 3,
+    "breach_names": [
+      "农业银行",
+      "招商银行",
+      "国电电力"
+    ],
+    "extreme_stocks": [
+      "中证机器人 -3.99%"
+    ],
+    "cognitive_tag": "VIX驱动型",
+    "calibration_hint": "overseas_unreliable"
   }
 }
