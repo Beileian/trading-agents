@@ -250,37 +250,75 @@ def extract_ima_sentence_for_stock(opinions_text: str, stock_name: str) -> str:
 
 
 def match_external_signals(symbol: str, overseas_text: str | None,
-                           opinions_text: str | None) -> tuple[list[str], str]:
-    risk_tags = []
-    ima_summary = ""
-    keywords = TICKER_SECTOR_MAP.get(symbol, [])
+                           opinions_text: str | None) -> tuple[str, str]:
+    """匹配外盘和IMA，返回 (风险描述, 催化描述) 各50-100字"""
+    risk_desc = ""
+    catalyst_desc = ""
+    name = dict(TICKERS).get(symbol, '')
 
-    # ── 外盘信号 → 风险标签 ──
+    def clean_md(t):
+        t = re.sub(r'\*\*([^*]+)\*\*', r'', t)
+        t = re.sub(r'\*\*', '', t)
+        return t.strip()
+
+    # 提取外盘 bullet 行
     if overseas_text:
         overseas_lower = overseas_text.lower()
-        if any(w in overseas_lower for w in ['偏空', '暴跌', '承压', '跳空']):
-            overseas_direction = '偏空'
-        elif any(w in overseas_lower for w in ['偏多', '反弹', '逆势', '修复', '独立行情']):
-            overseas_direction = '偏多'
+        is_bearish = any(w in overseas_lower for w in ['偏空', '暴跌', '跳空'])
+        # 注意: '承压'可能出现在中性方向里（如"科技板块承压"），不作为单向判断
+        is_bullish = any(w in overseas_lower for w in ['偏多', '反弹', '逆势', '修复'])
+        is_clear = is_bearish or is_bullish  # 只有方向明确时才匹配
+
+        bullets = []
+        for l in overseas_text.split(chr(10)):
+            ls = l.strip()
+            if ls.startswith('- ') or ls.startswith('* '):
+                cl = clean_md(ls.lstrip('- *'))
+                if len(cl) > 10 and not any(cl.startswith(s) for s in ['关键信号', '信号摘要', '研判内容', '风险提示']):
+                    bullets.append(cl)
+
+        if is_clear and is_bearish and bullets:
+            for b in bullets:
+                if any(w in b.lower() for w in ['跌', '空', '承压', '纳指下跌', '暴跌']):
+                    risk_desc = b
+                    break
+            if not risk_desc:
+                risk_desc = bullets[0]
+        elif is_clear and is_bullish and bullets:
+            for b in bullets:
+                if any(w in b.lower() for w in ['涨', '多', '反弹', '修复', '新高', '走强', 'vix', '降']):
+                    catalyst_desc = b
+                    break
+            if not catalyst_desc:
+                catalyst_desc = bullets[0]
+
+    # IMA 知识库
+    ima_text = extract_ima_sentence_for_stock(opinions_text, name)
+    if ima_text:
+        ima_clean = clean_md(ima_text)
+        ima_clean = re.sub(r'\[([^\]]+)\]\([^)]+\)', r'', ima_clean)
+        if any(w in ima_clean for w in ['跌', '空', '承压', '风险', '下探', '回落', '减持', '卖出']):
+            if risk_desc:
+                risk_desc = risk_desc + "；" + ima_clean[:80]
+            else:
+                risk_desc = ima_clean[:100]
         else:
-            overseas_direction = None
-        matched_kws = [kw for kw in keywords if kw.lower() in overseas_lower]
-        if matched_kws and overseas_direction:
-            if overseas_direction == '偏空':
-                risk_tags.append("外盘偏空承压")
-            elif overseas_direction == '偏多':
-                risk_tags.append("外盘偏多助力")
+            catalyst_desc = ima_clean[:100]
 
-    # ── IMA 知识库 → 文章中与标的相关的50字内容摘要 ──
-    name = ''
-    for s, n in TICKERS:
-        if s == symbol:
-            name = n
-            break
-    if name:
-        ima_summary = extract_ima_sentence_for_stock(opinions_text, name)
+    def trunc(text, max_len=100):
+        if not text or len(text) <= max_len:
+            return text or ""
+        for sep in '。！？':
+            idx = text[:max_len].rfind(sep)
+            if idx >= 30:
+                return text[:idx+1]
+        for sep in '，,':
+            idx = text[:max_len].rfind(sep)
+            if idx >= 30:
+                return text[:idx+1] + '..'
+        return text[:max_len-2] + '..'
 
-    return risk_tags, ima_summary
+    return trunc(risk_desc), trunc(catalyst_desc)
 
 
 def main():
@@ -305,7 +343,7 @@ def main():
                 'name': name, 'price': '-', 'bias': '-',
                 'support': '-', 'resistance': '-',
                 'trend': '-', 'advice': 'hold', 'pos': '-',
-                'trigger': '首日纳入，暂无数据', 'risk_tags': [], 'ima': '',
+                'trigger': '首日纳入，暂无数据', 'risk': '', 'catalyst': '',
             })
             continue
 
@@ -327,13 +365,13 @@ def main():
         pos = extract(section, '建议仓位')
 
         tech_trigger = adjust_trigger(advice, support, resistance, bias_val, bias_dir, calibration_hint)
-        risk_tags, ima_summary = match_external_signals(symbol, overseas_text, opinions_text)
+        risk_desc, catalyst_desc = match_external_signals(symbol, overseas_text, opinions_text)
 
         records.append({
             'name': name, 'price': price, 'bias': bias_display,
             'support': support, 'resistance': resistance,
             'trend': trend, 'advice': advice, 'pos': pos,
-            'trigger': tech_trigger, 'risk_tags': risk_tags, 'ima': ima_summary,
+            'trigger': tech_trigger, 'risk': risk_desc, 'catalyst': catalyst_desc,
         })
 
     # ═══════════════════════════════════════════════
@@ -343,31 +381,83 @@ def main():
     lines.append("交易推荐 · 开盘前推送")
     lines.append("")
 
-    # 上日复盘摘要 — 只保留通用信息，具体标的的缝入下方段落
-    if last_review and last_review.get("date"):
+    # ── 复盘摘要 200-300字 ──
+    if last_review and last_review.get("review_summary"):
+        lines.append(last_review["review_summary"])
+    elif last_review and last_review.get("date"):
+        # fallback: short format
         cal_parts = [f"复盘 {last_review['date']}"]
         if last_review.get("direction_match"):
-            icon = "" if last_review["direction_match"] == "吻合" else "✗"
-            if icon:
-                cal_parts.append(f"外盘{icon}{last_review.get('overseas_predicted','')}→{last_review.get('overseas_actual','')}")
-            else:
-                cal_parts.append(f"外盘{last_review.get('overseas_predicted','')}→{last_review.get('overseas_actual','')}")
+            cal_parts.append(f"外盘{last_review.get('overseas_predicted','')}→{last_review.get('overseas_actual','')}")
         if last_review.get("cognitive_tag"):
             cal_parts.append(last_review['cognitive_tag'])
         lines.append(" · ".join(cal_parts))
 
-    # 外盘信号
+    # ── 外盘摘要 200-300字 ──
     if overseas_text:
         lines.append("")
+        # 取研判方向
         direction_match = re.search(r"\*\*研判方向\*\*:\s*(.+?)(?:\s*\|)", overseas_text)
+        overseas_summary_lines = []
         if direction_match:
-            direction = direction_match.group(1)
-            lines.append(f"隔夜外盘: {direction}")
-            for l in overseas_text.split('\n'):
-                if l.strip().startswith('- ') and '📊' not in l:
-                    lines.append(f"  {l.strip()}")
+            overseas_summary_lines.append(f"隔夜外盘研判：{direction_match.group(1)}。")
+        # 取信号部分（多行）
+        in_signal = False
+        signal_text = []
+        for l in overseas_text.split('\n'):
+            if any(w in l for w in ['关键信号', '信号摘要', '研判内容']):
+                in_signal = True
+                continue
+            if in_signal and l.strip().startswith('- '):
+                cl = l.strip().lstrip('- *').strip()
+                cl = re.sub(r'\*\*(.+?)\*\*', r'\1', cl)
+                if len(cl) > 10:
+                    signal_text.append(cl)
+            elif in_signal and not l.strip():
+                break  # empty line after signal block
+        if not signal_text:
+            # fallback: markdown horizontal rule separated blocks
+            blocks = overseas_text.split('\n---')
+            for block in blocks:
+                for l in block.split('\n'):
+                    l = l.strip()
+                    if l.startswith('- ') and '📊' not in l and len(l) > 20:
+                        cl = re.sub(r'\*\*([^*]+)\*\*', r'\1', l.lstrip('- *'))
+                        signal_text.append(cl)
+                    if len(signal_text) >= 4:
+                        break
+                if signal_text:
                     break
 
+        for s in signal_text:
+            overseas_summary_lines.append(s + "。")
+        # 拼接
+        overseas_summary = "".join(overseas_summary_lines)
+        # 去掉剩余 markdown 标记
+        overseas_summary = re.sub(r'\*\*', '', overseas_summary)
+
+        if len(overseas_summary) < 100:
+            raw_lines = [l.strip() for l in overseas_text.split('\n') if len(l.strip()) > 30
+                      and not l.strip().startswith('#') and not l.strip().startswith('|')
+                      and '研报' not in l]
+            for rl in raw_lines[:5]:
+                clean = re.sub(r'\*\*|[📊🚨✅❌🔥⚠️📈📉📰🌐🔴🟢🟡]', '', rl).strip()
+                clean = re.sub(r'^[>\s]+', '', clean)
+                if clean and clean not in overseas_summary:
+                    overseas_summary += clean + "。"
+                    if len(overseas_summary) >= 250:
+                        break
+        # 截断300字的最后一个完整句子
+        if len(overseas_summary) > 300:
+            for sep in '。！？':
+                idx = overseas_summary[:300].rfind(sep)
+                if idx >= 150:
+                    overseas_summary = overseas_summary[:idx+1]
+                    break
+            else:
+                overseas_summary = overseas_summary[:298] + '..'
+        lines.append(overseas_summary)
+    
     lines.append("")
 
     sell = hold = buy = 0
@@ -385,11 +475,11 @@ def main():
             op_label = '持有'
             hold += 1
 
-        # 标的段落
+        # 标的段落 — 不含仓位
         header = f"{op_icon}{r['name']}  {r['price']}"
         if r['bias'] and r['bias'] != '-':
             header += f"  乖离{r['bias']}"
-        header += f"  {op_label}({r['pos']})"
+        header += f"  {op_label}"
         lines.append(header)
 
         # 支撑/阻力
@@ -405,24 +495,25 @@ def main():
         if r['trigger'] and r['trigger'] != '-':
             lines.append(f"  触发: {r['trigger']}")
 
-        # 风险/催化 + 复盘缝入
-        risk_cat = []
-        if r['risk_tags']:
-            risk_cat.extend(r['risk_tags'])
-        if r['ima']:
-            risk_cat.append(f"{r['ima']}")
-
-        # 卖出误判缝入对应标的
+        # 风险/催化 分拆
+        risk_lines = []
+        if r['risk']:
+            risk_lines.append(r['risk'])
+        # 复盘缝入
         if last_review and last_review.get("date"):
+            cal_notes = []
             if r['name'] in last_review.get("sell_wrong_names", []):
-                risk_cat.append("复盘: 上日卖出误判，收涨")
-            # 穿越缝入
+                cal_notes.append("上日卖出误判收涨")
             for b in last_review.get("breach_names", []):
                 if r['name'] == b:
-                    risk_cat.append("复盘: 上日触发穿越")
+                    cal_notes.append("上日触发穿越")
+            if cal_notes:
+                risk_lines.append("复盘：" + "、".join(cal_notes))
+        if risk_lines:
+            lines.append(f"  风险：{' | '.join(risk_lines)}")
 
-        if risk_cat:
-            lines.append(f"  {' · '.join(risk_cat)}")
+        if r['catalyst']:
+            lines.append(f"  催化：{r['catalyst']}")
 
         lines.append("")
 

@@ -478,6 +478,53 @@ def update_cognition_state(prices, thresholds, overseas_dir, overseas_conf):
         "calibration_hint": hint,
     }
 
+    # ── 生成200-300字复盘摘要供次日推送 ──
+    review_lines = []
+    review_lines.append(f"{TODAY_TAG}收盘复盘。")
+
+    # 指数表现
+    idx_info = []
+    for n in ['上证50', '沪深300', '科创50']:
+        if n in prices:
+            idx_info.append(f"{n} {prices[n]['chg_pct']:+.2f}%")
+    if idx_info:
+        review_lines.append(f"三大指数表现：{' / '.join(idx_info)}。")
+
+    # 外盘验证
+    if overseas_dir and overseas_actual:
+        if overseas_match == '吻合':
+            review_lines.append(f"盘前外盘研判{overseas_dir}，收盘方向吻合，外盘信号有效。")
+        else:
+            review_lines.append(f"盘前外盘研判{overseas_dir}，但收盘实际{overseas_actual}，方向偏离，外盘参考价值降权。")
+
+    # 操作建议验证
+    total = sum(op_counts.values())
+    review_lines.append(f"早盘{total}只标的推荐中，{op_counts['sell']}只卖出/{op_counts['hold']}只持有/{op_counts['buy']}只买入。")
+    if sell_wrong:
+        sw_str = "、".join(sell_wrong)
+        review_lines.append(f"其中{sw_str}建议卖出但实际收涨，卖出判断面临反弹压力。")
+    else:
+        review_lines.append(f"卖出建议标的全部收跌，卖出信号有效。")
+
+    # 穿越详情
+    if breach_names:
+        bn_str = "、".join(breach_names)
+        vol_level = "波动剧烈" if breach_count >= 3 else "波动可控"
+        review_lines.append(f"价格穿越方面，共触发{breach_count}条——"
+                          f"{bn_str}日内击穿支撑或阻力，{vol_level}。")
+    else:
+        review_lines.append(f"无价格穿越触发，支撑阻力位保持有效。")
+
+    # 极端波动
+    if extreme_stocks:
+        review_lines.append(f"极端波动（|涨跌|>=3%）：{'、'.join(extreme_stocks)}。")
+
+    # 风格
+    review_lines.append(f"当日市场风格：{tag}。")
+
+    review_summary = "".join(review_lines)
+    state["last_review"]["review_summary"] = review_summary
+
     state["last_updated"] = NOW.isoformat()
     state["last_trade_date"] = TODAY_TAG
 
