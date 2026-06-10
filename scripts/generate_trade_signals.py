@@ -238,7 +238,13 @@ def extract_ima_sentence_for_stock(opinions_text: str, stock_name: str) -> str:
                 if sn in s and len(s) > 10:
                     # 截断50字
                     if len(s) > 50:
-                        return s[:48] + ".."
+                        # CJK感知截断：在48字以内找最后一个,。！？处截断
+                        chunk = s[:48]
+                        for sep in ',，。！？、':
+                            idx = chunk.rfind(sep)
+                            if idx >= 20:
+                                return chunk[:idx+1] + '..'
+                        return chunk + '..' 
                     return s
     return ""
 
