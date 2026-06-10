@@ -23,7 +23,11 @@ SINA_MAP = {
     "sh000016": ("上证50"), "sh000300": ("沪深300"), "sh000688": ("科创50"),
     "sh601288": ("农业银行"), "sh601988": ("中国银行"), "sh600036": ("招商银行"),
     "sh600795": ("国电电力"), "sz000066": ("中国长城"), "sh600562": ("国睿科技"),
+    "sh562500": ("中证机器人"),
 }
+
+ALL_NAMES = ["上证50", "沪深300", "科创50", "农业银行", "中国银行",
+             "招商银行", "国电电力", "中国长城", "国睿科技", "中证机器人"]
 
 
 def fetch_close_prices():
@@ -205,8 +209,7 @@ def summarize_cognition(prices, thresholds, overseas_dir, overseas_conf):
     # ── 2. 标的交叉对比：早盘建议 vs 实际走势 ──
     sell_wrong = []  # 建议卖出但实际收涨
     hold_right = []  # 建议持有且方向合理
-    for name in ["上证50", "沪深300", "科创50", "农业银行", "中国银行",
-                  "招商银行", "国电电力", "中国长城", "国睿科技"]:
+    for name in ALL_NAMES:
         if name not in prices or name not in thresholds:
             continue
         p = prices[name]
@@ -251,8 +254,7 @@ def build_report(prices, thresholds, overseas_dir, overseas_conf):
     lines.append("| 标的 | 今收 | 涨跌% | 日内高 | 日内低 | 早盘建议 | 仓位 |")
     lines.append("|------|------|-------|--------|--------|----------|------|")
 
-    for name in ["上证50", "沪深300", "科创50", "农业银行", "中国银行",
-                  "招商银行", "国电电力", "中国长城", "国睿科技"]:
+    for name in ALL_NAMES:
         if name not in prices:
             continue
         p = prices[name]
@@ -290,8 +292,7 @@ def build_report(prices, thresholds, overseas_dir, overseas_conf):
 
     # 从 cross-check 结果提取今日增量
     sell_wrong_count = 0
-    for name in ["上证50", "沪深300", "科创50", "农业银行", "中国银行",
-                  "招商银行", "国电电力", "中国长城", "国睿科技"]:
+    for name in ALL_NAMES:
         if name not in prices or name not in thresholds:
             continue
         p = prices[name]
@@ -345,6 +346,147 @@ def build_report(prices, thresholds, overseas_dir, overseas_conf):
     return "\n".join(lines)
 
 
+def update_cognition_state(prices, thresholds, overseas_dir, overseas_conf):
+    """Writes structured review metrics to cognition_state.json for next-day feedback."""
+    state_file = f"{PROJECT_DIR}/logs/cognition_state.json"
+    state = {}
+    if os.path.exists(state_file):
+        try:
+            with open(state_file) as f:
+                state = json.load(f)
+        except (json.JSONDecodeError, KeyError):
+            pass
+
+    # ── 1. Overseas direction match ──
+    overseas_match = None
+    overseas_actual = None
+    if overseas_dir:
+        bearish = "偏空" in overseas_dir
+        bullish = "偏多" in overseas_dir
+        idx_pcts = [prices[n]["chg_pct"] for n in ["上证50", "沪深300", "科创50"] if n in prices]
+        avg_idx = sum(idx_pcts) / len(idx_pcts) if idx_pcts else 0
+        if avg_idx < -0.5:
+            overseas_actual = "偏空"
+        elif avg_idx > 0.5:
+            overseas_actual = "偏多"
+        else:
+            overseas_actual = "震荡"
+        overseas_match = "吻合" if (
+            (bearish and overseas_actual == "偏空") or
+            (bullish and overseas_actual == "偏多")
+        ) else "偏离"
+
+    # ── 2. Sell mis-rate ──
+    sell_wrong = []
+    for name in ALL_NAMES:
+        if name not in prices or name not in thresholds:
+            continue
+        t = thresholds[name]
+        if t.get("op") == "sell" and prices[name]["chg_pct"] > 0.5:
+            sell_wrong.append(name)
+    total_sell = sum(1 for n in ALL_NAMES if n in thresholds and thresholds[n].get("op") == "sell")
+    sell_misrate = len(sell_wrong) / total_sell if total_sell > 0 else 0
+
+    # ── 3. Breach hit rate ──
+    breaches = check_breaches(prices, thresholds)
+    breach_count = len(breaches)
+    breach_names = list(set(b["name"] for b in breaches))
+    total_with_thresholds = sum(1 for n in ALL_NAMES if n in thresholds and (
+        thresholds[n].get("support") is not None or thresholds[n].get("resistance") is not None
+    ))
+    breach_hit_rate = breach_count / total_with_thresholds if total_with_thresholds > 0 else 0
+
+    # ── 4. Update rolling histories ──
+    m = state.get("metrics", {})
+
+    # Overseas accuracy
+    oa = m.get("overseas_direction_accuracy", {})
+    oa_hist = oa.get("history", [])
+    oa_hist.append(1 if overseas_match == "吻合" else 0)
+    oa_hist = oa_hist[-5:]
+    oa_5d = sum(oa_hist) / len(oa_hist) if oa_hist else None
+    oa["history"] = oa_hist
+    oa["rolling_5d"] = oa_5d
+    if oa_5d is not None:
+        oa["label"] = "accurate" if oa_5d >= 0.6 else ("unreliable" if oa_5d <= 0.4 else "neutral")
+
+    # Sell misrate
+    sm = m.get("sell_misrate", {})
+    sm_hist = sm.get("history", [])
+    sm_hist.append(sell_misrate)
+    sm_hist = sm_hist[-3:]
+    sm_3d = sum(sm_hist) / len(sm_hist) if sm_hist else None
+    sm["history"] = sm_hist
+    sm["rolling_3d"] = sm_3d
+    if sm_3d is not None:
+        sm["label"] = "high_efficiency" if sm_3d <= 0.3 else ("low_efficiency" if sm_3d >= 0.5 else "neutral")
+
+    # Breach hit rate
+    bh = m.get("breach_hit_rate", {})
+    bh_hist = bh.get("history", [])
+    bh_hist.append(int(breach_count))
+    bh_hist = bh_hist[-3:]
+    bh_3d = sum(bh_hist) / len(bh_hist) if bh_hist else None
+    bh["history"] = bh_hist
+    bh["rolling_3d"] = bh_3d
+    if bh_3d is not None:
+        bh["label"] = "high_signal" if bh_3d >= 2 else ("low_signal" if bh_3d <= 0.5 else "neutral")
+
+    state["metrics"] = {
+        "overseas_direction_accuracy": oa,
+        "sell_misrate": sm,
+        "breach_hit_rate": bh,
+    }
+
+    # ── 5. Last review snapshot ──
+    extreme_stocks = [f"{n} {prices[n]['chg_pct']:+.2f}%" for n in ALL_NAMES
+                      if n in prices and abs(prices[n]["chg_pct"]) >= 3]
+
+    # Cognitive tag
+    morning_file = f"{OVERSEAS_DIR}/reports/morning_brief_{TODAY_DATE}.md"
+    tag = "技术面驱动型"
+    if os.path.exists(morning_file):
+        with open(morning_file) as f:
+            mb = f.read()
+        if "VIX" in mb:
+            tag = "VIX驱动型"
+        elif "非农" in mb or "就业" in mb:
+            tag = "宏观数据驱动型"
+        elif "财报" in mb:
+            tag = "财报驱动型"
+
+    # Calibration hint for next-day recommendations
+    hint = None
+    if sm_3d is not None and sm_3d >= 0.5:
+        hint = "sell_hold_bias"  # 卖出建议近期高误判 → 次日偏保守
+    elif oa_5d is not None and oa_5d <= 0.4:
+        hint = "overseas_unreliable"  # 外盘方向连续偏离 → 轻外盘重内盘
+    elif bh_3d is not None and bh_3d >= 3:
+        hint = "high_volatility"  # 穿越频繁 → 提高阈值敏感度
+
+    state["last_review"] = {
+        "date": TODAY_TAG,
+        "overseas_predicted": overseas_dir,
+        "overseas_actual": overseas_actual,
+        "direction_match": overseas_match,
+        "sell_wrong_count": len(sell_wrong),
+        "sell_wrong_names": sell_wrong,
+        "breach_count": breach_count,
+        "breach_names": breach_names,
+        "extreme_stocks": extreme_stocks,
+        "cognitive_tag": tag,
+        "calibration_hint": hint,
+    }
+
+    state["last_updated"] = NOW.isoformat()
+    state["last_trade_date"] = TODAY_TAG
+
+    with open(state_file, "w") as f:
+        json.dump(state, f, indent=2, ensure_ascii=False)
+
+    return hint
+
+
 def main():
     # 只在交易日运行，15:05 之后
     t = NOW.time()
@@ -374,6 +516,12 @@ def main():
 
     # 输出到 stdout 供 cron 日志
     print(report)
+
+    # 写入结构化复盘状态 → 供次日开盘前推荐算法喂回
+    hint = update_cognition_state(prices, thresholds, overseas_dir, overseas_conf)
+    if hint:
+        print(f"  认知校准标签: {hint}")
+
     print(f"\n✓ 收盘复盘完成")
 
 

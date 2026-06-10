@@ -1,0 +1,34 @@
+{
+  "last_updated": null,
+  "last_trade_date": null,
+  "metrics": {
+    "overseas_direction_accuracy": {
+      "history": [],
+      "rolling_5d": null,
+      "label": "neutral"
+    },
+    "sell_misrate": {
+      "history": [],
+      "rolling_3d": null,
+      "label": "neutral"
+    },
+    "breach_hit_rate": {
+      "history": [],
+      "rolling_3d": null,
+      "label": "neutral"
+    }
+  },
+  "last_review": {
+    "date": null,
+    "overseas_predicted": null,
+    "overseas_actual": null,
+    "direction_match": null,
+    "sell_wrong_count": 0,
+    "sell_wrong_names": [],
+    "breach_count": 0,
+    "breach_names": [],
+    "extreme_stocks": [],
+    "cognitive_tag": null,
+    "calibration_hint": null
+  }
+}

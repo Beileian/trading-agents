@@ -7,12 +7,44 @@
 v2: 集成外盘研判信号 + IMA 知识库观点 → 触发条件列落地到对应标的
 """
 
-import sys, os, re, pandas as pd
+import sys, os, re, json, pandas as pd
 from datetime import datetime, timezone, timedelta
 
 TZ = timezone(timedelta(hours=8))
 PROJECT_DIR = "/root/.openclaw/workspace/projects/trading-agents"
 OVERSEAS_DIR = "/root/.openclaw/workspace/projects/overseas-morning-brief"
+
+
+def load_calibration():
+    """Load yesterday's structured review state for feedback into today's recommendations."""
+    state_file = f"{PROJECT_DIR}/logs/cognition_state.json"
+    if not os.path.exists(state_file):
+        return None, None, None
+    try:
+        with open(state_file) as f:
+            state = json.load(f)
+    except (json.JSONDecodeError, KeyError):
+        return None, None, None
+
+    last = state.get("last_review", {})
+    hint = last.get("calibration_hint")
+    metrics = state.get("metrics", {})
+
+    # Extract rolling metrics
+    oa = metrics.get("overseas_direction_accuracy", {})
+    sm = metrics.get("sell_misrate", {})
+    bh = metrics.get("breach_hit_rate", {})
+
+    rolling = {
+        "overseas_5d_acc": oa.get("rolling_5d"),
+        "overseas_label": oa.get("label", "neutral"),
+        "sell_misrate_3d": sm.get("rolling_3d"),
+        "sell_label": sm.get("label", "neutral"),
+        "breach_3d_avg": bh.get("rolling_3d"),
+        "breach_label": bh.get("label", "neutral"),
+    }
+
+    return hint, last, rolling
 
 # 标的 → 外盘/板块映射关键词（用于匹配外盘信号和 IMA 观点）
 TICKER_SECTOR_MAP = {
@@ -105,8 +137,8 @@ def calc_bias_direction(symbol):
         return '-', ''
 
 
-def adjust_trigger(advice, support, resistance, bias_val, direction):
-    """根据乖离率修正触发条件"""
+def adjust_trigger(advice, support, resistance, bias_val, direction, calibration_hint=None):
+    """根据乖离率修正触发条件，叠加上日复盘校准信号"""
     if advice == '-' or '出' not in advice and '入' not in advice and '持' not in advice:
         return '-'
 
@@ -115,32 +147,48 @@ def adjust_trigger(advice, support, resistance, bias_val, direction):
     except:
         b = 0
 
+    # ── 复盘校准：卖出建议高误判 → 当日卖出建议降级为持有-观望 ──
+    calibration_suffix = ""
+    if calibration_hint == "sell_hold_bias" and '出' in advice:
+        calibration_suffix = " ⚠️上日复盘：卖出高误判，仓位谨慎"
+    elif calibration_hint == "overseas_unreliable" and '持' in advice:
+        calibration_suffix = " ⚠️上日复盘：外盘连续偏离，轻外盘重内盘"
+    elif calibration_hint == "high_volatility" and ('入' in advice or '出' in advice):
+        calibration_suffix = " ⚠️上日复盘：连续穿越，波动加剧"
+
+    base = None
+
     if '持' in advice:
         if b < -2 and direction == '↓':
-            return f"回调{int(abs(b))}%接近支撑{support}，反弹可期 → 可分批买入"
-        if b > 2 and direction == '↑':
-            return f"乖离{resistance}扩大 + 接近阻力 → 减仓规避"
-        if b < -2 and direction == '↑':
-            return f"加速下跌中，暂勿抄底 → 等{support}企稳"
-        if b > 2 and direction == '↓':
-            return f"乖离收敛中，趋势健康 → 持有"
-        return f"突破{resistance}加仓 / 跌破{support}减仓"
+            base = f"回调{int(abs(b))}%接近支撑{support}，反弹可期 → 可分批买入"
+        elif b > 2 and direction == '↑':
+            base = f"乖离{resistance}扩大 + 接近阻力 → 减仓规避"
+        elif b < -2 and direction == '↑':
+            base = f"加速下跌中，暂勿抄底 → 等{support}企稳"
+        elif b > 2 and direction == '↓':
+            base = f"乖离收敛中，趋势健康 → 持有"
+        else:
+            base = f"突破{resistance}加仓 / 跌破{support}减仓"
 
-    if '出' in advice:
+    elif '出' in advice:
         if b > 2 and direction == '↑':
-            return f"乖离+阻力双重压力 → 跌破{support}坚决止损"
-        if direction == '↓':
-            return f"乖离收敛中，反弹可减亏 → {support}~{resistance}分批出"
-        return f"跌破{support}止损"
+            base = f"乖离+阻力双重压力 → 跌破{support}坚决止损"
+        elif direction == '↓':
+            base = f"乖离收敛中，反弹可减亏 → {support}~{resistance}分批出"
+        else:
+            base = f"跌破{support}止损"
 
-    if '入' in advice:
+    elif '入' in advice:
         if b < -2 and direction == '↓':
-            return f"超跌+乖离收敛 → {support}附近建仓"
-        if b > 2 and direction == '↑':
-            return f"乖离偏高，追高风险 → 等回调至{support}再入"
-        return f"回踩{support}买入"
+            base = f"超跌+乖离收敛 → {support}附近建仓"
+        elif b > 2 and direction == '↑':
+            base = f"乖离偏高，追高风险 → 等回调至{support}再入"
+        else:
+            base = f"回踩{support}买入"
 
-    return '-'
+    if base is None:
+        return '-'
+    return base + calibration_suffix
 
 
 # ═══════════════════════════════════════════════
@@ -227,6 +275,9 @@ def main():
     overseas_text = load_overseas_signal(date_str)
     opinions_text = load_ima_opinions(date_str)
 
+    # 加载上日复盘校准信号
+    calibration_hint, last_review, rolling_metrics = load_calibration()
+
     records = []
     for symbol, name in TICKERS:
         start = text.find(f"### {symbol}")
@@ -250,7 +301,7 @@ def main():
         pos = extract(section, '建议仓位')
 
         # 技术面触发条件
-        tech_trigger = adjust_trigger(advice, support, resistance, bias_val, bias_dir)
+        tech_trigger = adjust_trigger(advice, support, resistance, bias_val, bias_dir, calibration_hint)
 
         # 外部信号落地
         external_tags = match_external_signals(symbol, overseas_text, opinions_text)
@@ -309,6 +360,28 @@ def main():
     lines.append(" | ".join(sigs))
     lines.append("")
     lines.append("> 乖离↑=加速偏离 ↓=回归均线 →=持平 | ⚠️ AI模拟分析 · 不构成投资建议")
+
+    # ── 上日复盘校准行 ──
+    if last_review and last_review.get("date"):
+        lines.append("")
+        cal_parts = []
+        cal_parts.append(f"📅 {last_review['date']} 复盘校准")
+        if last_review.get("direction_match"):
+            icon = "✓" if last_review["direction_match"] == "吻合" else "✗"
+            cal_parts.append(f"外盘方向{icon}{last_review['overseas_predicted']}→{last_review['overseas_actual']}")
+        if last_review.get("sell_wrong_names"):
+            sw_names = ",".join(last_review['sell_wrong_names'])
+            cal_parts.append(f"卖出误判 {sw_names} 实际收涨")
+        if last_review.get("breach_names"):
+            br_names = ",".join(last_review['breach_names'])
+            cal_parts.append(f"触发穿越 {br_names}")
+        if last_review.get("cognitive_tag"):
+            cal_parts.append(f"类型: {last_review['cognitive_tag']}")
+        if rolling_metrics:
+            oa_str = f"{rolling_metrics['overseas_5d_acc']:.0%}" if rolling_metrics.get("overseas_5d_acc") is not None else "-"
+            sm_str = f"{rolling_metrics['sell_misrate_3d']:.0%}" if rolling_metrics.get("sell_misrate_3d") is not None else "-"
+            cal_parts.append(f"滚动(外盘方向{rolling_metrics.get('overseas_label','')} {oa_str} | 卖出效率{rolling_metrics.get('sell_label','')} {sm_str})")
+        lines.append(" | ".join(cal_parts))
 
     report = '\n'.join(lines)
     output_file = f"{PROJECT_DIR}/reports/trade_signals_{date_str}.md"
