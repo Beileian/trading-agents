@@ -217,19 +217,18 @@ def load_ima_opinions(date_str: str) -> str | None:
 
 
 def match_external_signals(symbol: str, overseas_text: str | None,
-                           opinions_text: str | None) -> list[str]:
+                           opinions_text: str | None) -> tuple[list[str], str]:
     """
-    为指定 symbol 匹配外盘信号和 IMA 观点。
-    返回附加信号短语列表，直接追加到触发条件列。
+    匹配外盘和IMA信号。
+    Returns: (风险标签列表, 知识库摘要50字以内)
     """
-    tags = []
+    risk_tags = []
+    ima_summary = ""
     keywords = TICKER_SECTOR_MAP.get(symbol, [])
 
-    # ── 外盘信号匹配 ──
+    # ── 外盘信号 → 风险标签 ──
     if overseas_text:
         overseas_lower = overseas_text.lower()
-
-        # 方向判断
         if any(w in overseas_lower for w in ['偏空', '暴跌', '承压', '跳空']):
             overseas_direction = '偏空'
         elif any(w in overseas_lower for w in ['偏多', '反弹', '逆势', '修复', '独立行情']):
@@ -239,27 +238,48 @@ def match_external_signals(symbol: str, overseas_text: str | None,
 
         matched_kws = [kw for kw in keywords if kw.lower() in overseas_lower]
         if matched_kws and overseas_direction:
-            tags.append(f"🌐外盘{overseas_direction}")
             if overseas_direction == '偏空':
-                tags.append("外盘承压需谨慎")
+                risk_tags.append("🌐外盘偏空承压")
             elif overseas_direction == '偏多':
-                tags.append("外盘助力")
+                risk_tags.append("🌐外盘偏多助力")
 
-        # 逆向信号
-        if '他人恐惧' in overseas_text and overseas_direction == '偏空':
-            for kw in ['科创', '成长', '科技']:
-                if kw in matched_kws:
-                    tags.append("💡逆向信号")
-                    break
-
-    # ── IMA 观点匹配 ──
+    # ── IMA 观点 → 知识库摘要 ──
     if opinions_text:
         opinion_lines = [l for l in opinions_text.split('\n') if any(
             kw in l for kw in keywords)]
         if opinion_lines:
-            tags.append("📰知识库有覆盖")
+            # 取第一条有效摘要，截断50字符
+            import re as _re
+            raw = ''
+            for ol in opinion_lines:
+                stripped = ol.strip().lstrip('- *> ').strip()
+                # 跳过来源/权重/markdown链接等元数据行
+                if any(skip in stripped for skip in ['笔记', '来自', '权重衰减', '时间:', '作者:', '日期:']):
+                    continue
+                # 去掉 markdown 链接 [text](url)
+                stripped = _re.sub(r'\[([^\]]+)\]\([^)]+\)', r'', stripped)
+                # 去掉 **bold** 标记
+                stripped = _re.sub(r'\*\*([^*]+)\*\*', r'', stripped)
+                # 去掉权重标记 w=0.xx | ⭐
+                stripped = _re.sub(r'\s*w=[\d.]+\s*', '', stripped)
+                # 去掉 [YYYY-MM-DD] 日期标签
+                stripped = _re.sub(r'\s*\[[\d]{4}-[\d]{2}-[\d]{2}\]\s*', '', stripped)
+                # 去掉残留的 ** 
+                stripped = stripped.replace('**', '')
+                stripped = _re.sub(r'\s*⭐\s*$', '', stripped)
+                if len(stripped) > 8:
+                    raw = stripped
+                    break
+            if not raw:
+                raw = opinion_lines[0].strip().lstrip('- *> ').strip()
+                raw = _re.sub(r'\[([^\]]+)\]\([^)]+\)', r'', raw)
+                raw = _re.sub(r'\*\*([^*]+)\*\*', r'', raw)
+            if len(raw) > 50:
+                ima_summary = raw[:48] + ".."
+            elif raw:
+                ima_summary = raw
 
-    return tags
+    return risk_tags, ima_summary
 
 
 def main():
@@ -304,84 +324,111 @@ def main():
         tech_trigger = adjust_trigger(advice, support, resistance, bias_val, bias_dir, calibration_hint)
 
         # 外部信号落地
-        external_tags = match_external_signals(symbol, overseas_text, opinions_text)
-
-        # 合并触发条件
-        if external_tags:
-            sep = "；" if tech_trigger and tech_trigger != '-' else ""
-            trigger = f"{tech_trigger}{sep}{' | '.join(external_tags)}"
-        else:
-            trigger = tech_trigger
+        risk_tags, ima_summary = match_external_signals(symbol, overseas_text, opinions_text)
 
         records.append({
             'name': name, 'price': price, 'bias': bias_display,
             'support': support, 'resistance': resistance,
-            'trend': trend, 'advice': advice, 'pos': pos, 'trigger': trigger,
+            'trend': trend, 'advice': advice, 'pos': pos,
+            'trigger': tech_trigger, 'risk_tags': risk_tags, 'ima': ima_summary,
         })
 
-    # 建表
+    # ── 构建段落式输出 ──
     lines = []
     lines.append("## 📊 交易推荐 · 开盘前推送")
     lines.append("")
-    # 外盘信号摘要（表格前）
+
+    # 上日复盘校准（表格上方一行）
+    if last_review and last_review.get("date"):
+        cal_parts = [f"📅 {last_review['date']}复盘"]
+        if last_review.get("direction_match"):
+            icon = "✓" if last_review["direction_match"] == "吻合" else "✗"
+            cal_parts.append(f"外盘{icon}{last_review.get('overseas_predicted','--')}→{last_review.get('overseas_actual','--')}")
+        if last_review.get("sell_wrong_names"):
+            sw = ",".join(last_review['sell_wrong_names'])
+        cal_parts.append(f"卖出误判{sw}")
+        if last_review.get("breach_names"):
+            bn = ",".join(last_review['breach_names'])
+        cal_parts.append(f"穿越{bn}")
+        if last_review.get("cognitive_tag"):
+            cal_parts.append(last_review['cognitive_tag'])
+        lines.append(" · ".join(cal_parts))
+
+    # 外盘信号摘要
     if overseas_text:
+        lines.append("")
         direction_match = re.search(r"\*\*研判方向\*\*:\s*(.+?)(?:\s*\|)", overseas_text)
         if direction_match:
             direction = direction_match.group(1)
             lines.append(f"🌐 隔夜外盘: **{direction}**")
-            # 关键信号第一行
             for l in overseas_text.split('\n'):
                 if l.strip().startswith('- ') and '📊' not in l:
                     lines.append(f"> {l.strip()}")
                     break
-            lines.append("")
 
-    lines.append("| 标的 | 现价 | 乖离(20) | 支撑 | 阻力 | 操作 | 仓位 | 触发条件 |")
-    lines.append("|------|------|----------|------|------|------|------|----------|")
+    lines.append("")
+    lines.append("---")
 
     sell = hold = buy = 0
     for r in records:
         if '出' in r['advice']:
-            op = '🔴卖出'
+            op_icon = '🔴'
+            op_label = '卖出'
             sell += 1
         elif '入' in r['advice']:
-            op = '🟢买入'
+            op_icon = '🟢'
+            op_label = '买入'
             buy += 1
         else:
-            op = '🟡持有'
+            op_icon = '🟡'
+            op_label = '持有'
             hold += 1
-        lines.append(f"| {r['name']} | {r['price']} | {r['bias']} | {r['support']} | {r['resistance']} | {op} | {r['pos']} | {r['trigger']} |")
+
+        lines.append("")
+        # 第一行：图标 + 名称 + 现价 + 乖离 + 操作(仓位)
+        header = f"{op_icon} **{r['name']}** · {r['price']}"
+        if r['bias'] and r['bias'] != '-':
+            header += f" · 乖离 {r['bias']}"
+        header += f" · {op_label} ({r['pos']})"
+        lines.append(header)
+
+        # 支撑/阻力行
+        sup_res = []
+        if r['support'] and r['support'] != '-':
+            sup_res.append(f"支撑 {r['support']}")
+        if r['resistance'] and r['resistance'] != '-':
+            sup_res.append(f"阻力 {r['resistance']}")
+        if sup_res:
+            lines.append(f"　{' / '.join(sup_res)}")
+
+        # 触发条件
+        if r['trigger'] and r['trigger'] != '-':
+            lines.append(f"　触发：{r['trigger']}")
+
+        # 风险/催化
+        risk_cat = []
+        if r['risk_tags']:
+            risk_cat.extend(r['risk_tags'])
+        if r['ima']:
+            risk_cat.append(f"📰{r['ima']}")
+
+        # 复盘校准 → 缝入对应标的
+        if last_review and last_review.get("date"):
+            if r['name'] in last_review.get("sell_wrong_names", []):
+                risk_cat.append("⚠️上日复盘：卖出建议误判")
+
+        if risk_cat:
+            lines.append(f"　风险/催化：{' · '.join(risk_cat)}")
 
     lines.append("")
+    lines.append("---")
     sigs = []
     if sell: sigs.append(f"🔴卖出 {sell}只")
     if hold: sigs.append(f"🟡持有 {hold}只")
     if buy:  sigs.append(f"🟢买入 {buy}只")
-    lines.append(" | ".join(sigs))
+    lines.append(" · ".join(sigs))
     lines.append("")
-    lines.append("> 乖离↑=加速偏离 ↓=回归均线 →=持平 | ⚠️ AI模拟分析 · 不构成投资建议")
-
-    # ── 上日复盘校准行 ──
-    if last_review and last_review.get("date"):
-        lines.append("")
-        cal_parts = []
-        cal_parts.append(f"📅 {last_review['date']} 复盘校准")
-        if last_review.get("direction_match"):
-            icon = "✓" if last_review["direction_match"] == "吻合" else "✗"
-            cal_parts.append(f"外盘方向{icon}{last_review['overseas_predicted']}→{last_review['overseas_actual']}")
-        if last_review.get("sell_wrong_names"):
-            sw_names = ",".join(last_review['sell_wrong_names'])
-            cal_parts.append(f"卖出误判 {sw_names} 实际收涨")
-        if last_review.get("breach_names"):
-            br_names = ",".join(last_review['breach_names'])
-            cal_parts.append(f"触发穿越 {br_names}")
-        if last_review.get("cognitive_tag"):
-            cal_parts.append(f"类型: {last_review['cognitive_tag']}")
-        if rolling_metrics:
-            oa_str = f"{rolling_metrics['overseas_5d_acc']:.0%}" if rolling_metrics.get("overseas_5d_acc") is not None else "-"
-            sm_str = f"{rolling_metrics['sell_misrate_3d']:.0%}" if rolling_metrics.get("sell_misrate_3d") is not None else "-"
-            cal_parts.append(f"滚动(外盘方向{rolling_metrics.get('overseas_label','')} {oa_str} | 卖出效率{rolling_metrics.get('sell_label','')} {sm_str})")
-        lines.append(" | ".join(cal_parts))
+    lines.append("> 乖离↑加速偏离 ↓回归均线 →持平 | ⚠️ AI模拟分析 · 不构成投资建议")
 
     report = '\n'.join(lines)
     output_file = f"{PROJECT_DIR}/reports/trade_signals_{date_str}.md"
