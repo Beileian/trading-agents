@@ -444,6 +444,101 @@ def calc_five_year_anchor() -> Optional[SignalLight]:
 
 
 # ═══════════════════════════════════════════════════════════════
+# 指标五: 融资情绪
+# ═══════════════════════════════════════════════════════════════
+
+def _fetch_total_margin_balance() -> Optional[pd.Series]:
+    """获取沪深两市融资余额合计，返回日频Series"""
+    cache_file = os.path.join(DATA_CACHE, "margin_total.csv")
+    if os.path.exists(cache_file):
+        try:
+            cached = pd.read_csv(cache_file, index_col=0, parse_dates=True)
+            if len(cached) > 0:
+                last_date = cached.index[-1].to_pydatetime().date()
+                today = NOW().date()
+                if last_date >= today or today.weekday() >= 5:
+                    return pd.Series(cached['balance'].values, index=pd.to_datetime(cached.index))
+        except Exception:
+            pass
+
+    try:
+        sh = ak.macro_china_market_margin_sh()
+        sz = ak.macro_china_market_margin_sz()
+        if sh is None or sh.empty or sz is None or sz.empty:
+            return None
+
+        sh['日期'] = pd.to_datetime(sh['日期'])
+        sz['日期'] = pd.to_datetime(sz['日期'])
+
+        sh_balance = sh.set_index('日期')['融资余额']
+        sz_balance = sz.set_index('日期')['融资余额']
+
+        total = (sh_balance + sz_balance).dropna()
+        total = total.sort_index()
+
+        os.makedirs(DATA_CACHE, exist_ok=True)
+        out = total.copy()
+        out.index = out.index.strftime('%Y-%m-%d')
+        pd.DataFrame({'balance': out.values}, index=out.index).to_csv(cache_file, index_label='date')
+        return total
+    except Exception as e:
+        print(f"[style_rotation] margin fetch: {e}", file=sys.stderr)
+        return None
+
+
+def calc_margin_sentiment() -> Optional[SignalLight]:
+    """
+    融资情绪: 全市场融资余额3个月变化率。
+    融资余额快速上升=杠杆过热, 融资余额快速下降=恐慌出逃。
+    参考阈值: >10% 过热, <-10% 恐慌。
+    """
+    try:
+        total = _fetch_total_margin_balance()
+        if total is None or len(total) < 60:
+            return None
+
+        current = float(total.iloc[-1])
+        prev_3m_idx = max(0, len(total) - 60)
+        prev_3m = float(total.iloc[prev_3m_idx])
+
+        if prev_3m <= 0:
+            return None
+
+        chg_3m = (current - prev_3m) / prev_3m * 100
+
+        if chg_3m > 10:
+            signal, note = 'overheat', f"融资余额近3月+{chg_3m:.1f}%，杠杆过热"
+        elif chg_3m > 5:
+            signal, note = 'warm', f"融资余额近3月+{chg_3m:.1f}%，杠杆偏热"
+        elif chg_3m > -5:
+            signal, note = 'neutral', f"融资余额近3月{chg_3m:+.1f}%，杠杆正常"
+        elif chg_3m > -10:
+            signal, note = 'cold', f"融资余额近3月{chg_3m:.1f}%，杠杆收缩"
+        else:
+            signal, note = 'oversold', f"融资余额近3月{chg_3m:.1f}%，恐慌去杠杆"
+
+        # 历史分位
+        rank = 50.0
+        if len(total) > 120:
+            rols = []
+            for i in range(120, len(total)):
+                try:
+                    r = (float(total.iloc[i]) - float(total.iloc[i-60])) / float(total.iloc[i-60]) * 100
+                    rols.append(r)
+                except Exception:
+                    pass
+            if rols:
+                rank = pct_rank(pd.Series(rols), chg_3m)
+
+        return SignalLight("融资情绪", f"{chg_3m:+.1f}%", rank, signal, note,
+                          def_conf=3, data_conf=4)
+
+    except Exception as e:
+        print(f"[style_rotation] margin_sentiment: {e}", file=sys.stderr)
+        return None
+
+
+# ═══════════════════════════════════════════════════════════════
 # 主入口
 # ═══════════════════════════════════════════════════════════════
 
@@ -451,7 +546,8 @@ def compute_market_temperature() -> MarketTemperature:
     temp = MarketTemperature()
 
     for fn in [calc_equity_bond_spread, calc_bias_fund_return,
-               calc_dividend_premium, calc_five_year_anchor]:
+               calc_dividend_premium, calc_five_year_anchor,
+               calc_margin_sentiment]:
         try:
             result = fn()
             if result:
