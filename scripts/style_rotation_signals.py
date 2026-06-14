@@ -134,6 +134,40 @@ def _fetch_csindex_value(index_code: str) -> Optional[pd.DataFrame]:
         return None
 
 
+def _fetch_tencent_index_pe(index_code: str) -> Optional[float]:
+    """从腾讯财经接口拉取指数PE(TTM)，字段[39]，每日更新"""
+    try:
+        import urllib.request
+        url = f'http://qt.gtimg.cn/q=sh{index_code}'
+        req = urllib.request.Request(url, headers={'Referer': 'https://finance.qq.com'})
+        resp = urllib.request.urlopen(req, timeout=10)
+        text = resp.read().decode('gbk')
+        parts = text.split('~')
+        if len(parts) > 39:
+            pe_val = float(parts[39]) if parts[39] else None
+            if pe_val and pe_val > 0 and pe_val < 500:
+                return pe_val
+        return None
+    except Exception as e:
+        print(f"[style_rotation] tencent PE {index_code}: {e}", file=sys.stderr)
+        return None
+    """10年期国债收益率 (%)"""
+    try:
+        df = ak.bond_zh_us_rate()
+        if df is None or df.empty:
+            return None
+        latest = df.iloc[-1]
+        for col in df.columns:
+            if '10' in col and ('国债' in col or '中国' in col):
+                val = pd.to_numeric(latest[col], errors='coerce')
+                if not pd.isna(val) and 0 < val < 20:
+                    return float(val)
+        return None
+    except Exception as e:
+        print(f"[style_rotation] bond_10y failed: {e}", file=sys.stderr)
+        return None
+
+
 def _fetch_bond_10y() -> Optional[float]:
     """10年期国债收益率 (%)"""
     try:
@@ -175,22 +209,28 @@ def signal_from_rank(pct: float) -> str:
 def calc_equity_bond_spread() -> Optional[SignalLight]:
     """
     股债性价比 = 1/PE_TTM − 10年期国债收益率
-    数据: csindex 沪深300 PE(TTM) + bond_zh_us_rate 10Y国债
+    数据: 腾讯财经PE(实时) + bond_zh_us_rate 10Y国债
+    历史分位: csindex PE历史序列(20日) + 腾讯实时PE弹性扩展
     """
     try:
-        cs_df = _fetch_csindex_value('000300')
-        if cs_df is None or len(cs_df) == 0:
-            return None
-
-        last_row = cs_df.iloc[-1]
-        pe_col = '市盈率1' if '市盈率1' in cs_df.columns else None
-        if pe_col is None:
-            return None
-
-        pe_ttm = pd.to_numeric(last_row[pe_col], errors='coerce')
-        if pd.isna(pe_ttm) or pe_ttm <= 0:
-            return None
-        pe_ttm = float(pe_ttm)
+        # 优先用腾讯财经实时PE
+        pe_ttm = _fetch_tencent_index_pe('000300')
+        data_conf = 4  # 腾讯PE每日更新, 置信度高
+        
+        if pe_ttm is None:
+            # 降级到csindex
+            cs_df = _fetch_csindex_value('000300')
+            if cs_df is None or len(cs_df) == 0:
+                return None
+            last_row = cs_df.iloc[-1]
+            pe_col = '市盈率1' if '市盈率1' in cs_df.columns else None
+            if pe_col is None:
+                return None
+            pe_ttm = pd.to_numeric(last_row[pe_col], errors='coerce')
+            if pd.isna(pe_ttm) or pe_ttm <= 0:
+                return None
+            pe_ttm = float(pe_ttm)
+            data_conf = 2  # csindex滞后, 置信度低
 
         bond_yield = _fetch_bond_10y()
         if bond_yield is None:
@@ -198,9 +238,18 @@ def calc_equity_bond_spread() -> Optional[SignalLight]:
 
         spread = 100.0 / pe_ttm - bond_yield  # 1/PE 转为百分比后减去国债收益率(%)
 
-        # 历史分位
-        pe_series = pd.to_numeric(cs_df[pe_col], errors='coerce').dropna()
-        rank = pct_rank(100.0 / pe_series - bond_yield, spread) if len(pe_series) > 5 else 50.0
+        # 历史分位: 用csindex历史PE序列 + 当前腾讯PE弹性扩展
+        rank = 50.0
+        cs_df = _fetch_csindex_value('000300')
+        if cs_df is not None and len(cs_df) > 5:
+            pe_col = '市盈率1' if '市盈率1' in cs_df.columns else None
+            if pe_col:
+                hist_pe = pd.to_numeric(cs_df[pe_col], errors='coerce').dropna()
+                if len(hist_pe) > 5:
+                    # 将腾讯PE加入序列末尾以校准分位
+                    hist_pe_ext = pd.concat([hist_pe, pd.Series([pe_ttm])])
+                    rank = pct_rank(100.0 / hist_pe_ext - bond_yield, spread)
+
         signal = signal_from_rank(rank)
 
         if rank > 80:
@@ -215,7 +264,7 @@ def calc_equity_bond_spread() -> Optional[SignalLight]:
             note = f"股债性价比极低({spread:.1f}%)，债券优于股票"
 
         return SignalLight("股债性价比", f"{spread:.1f}%", rank, signal, note,
-                          def_conf=4, data_conf=2)
+                          def_conf=4, data_conf=data_conf)
 
     except Exception as e:
         print(f"[style_rotation] equity_bond_spread: {e}", file=sys.stderr)
