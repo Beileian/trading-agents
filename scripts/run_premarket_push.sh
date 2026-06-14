@@ -28,13 +28,24 @@ for src in /root/.openclaw/workspace/projects/trading-agents/data/cache/*-daily.
     base=$(basename "$src")
     # 转换为 YFin-data 格式的文件名
     sym="${base%-daily.csv}"
-    dest="/root/.openclaw/workspace/projects/trading-agents/logs/cache/${sym}-YFin-data-2021-06-04-2026-06-09.csv"
+    sym_sh="${sym/.SS/.SH}"
+    dest="/root/.openclaw/workspace/projects/trading-agents/logs/cache/${sym_sh}-YFin-data-2021-06-04-2026-06-09.csv"
     cp "$src" "$dest"
-    # 同时覆盖旧 YFin-data 文件
-    old_dest="/root/.openclaw/workspace/projects/trading-agents/logs/cache/${sym}-YFin-data-2021-06-04-2026-06-04.csv"
+    # 同时覆盖旧 YFin-data 文件（注意沪市 .SS 后缀需转换为 .SH）
+    sym_sh="${sym/.SS/.SH}"
+    old_dest="/root/.openclaw/workspace/projects/trading-agents/logs/cache/${sym_sh}-YFin-data-2021-06-04-2026-06-04.csv"
     [ -f "$old_dest" ] && cp "$src" "$old_dest" || true
 done
 echo "  缓存已同步到 logs/cache (YFin-data 格式)"
+
+# ── 第一层：缓存同步后抽查价格一致性 ──
+echo "[0/Y] 抽查缓存价格一致性..."
+/usr/bin/python3 "$SCRIPT_DIR/verify_cache_sync.py" 2>&1 || {
+    echo "[ALERT] 缓存同步校验失败，阻断推送"
+    echo "# 🚨 缓存同步异常\n\nverify_cache_sync.py 校验失败，价格数据可能过期，已阻断推送。\n时间: $(TZ=Asia/Shanghai date +%Y-%m-%d\ %H:%M:%S)" | python3 "$PUSH_SCRIPT" 2>/dev/null
+    exit 1
+}
+echo "  校验通过"
 
 # 步骤1: 技术分析报告
 echo "[1/5] 生成技术分析报告..."
@@ -54,9 +65,36 @@ echo "[2/5] 提取IMA知识库观点..."
 echo "[3/5] 提取外盘信号..."
 /usr/bin/python3 /root/.openclaw/workspace/projects/overseas-morning-brief/scripts/extract_signal.py 2>&1 || echo "[WARN] 外盘信号提取失败，继续"
 
-# 步骤4: 交易推荐表格
+# 步骤4: 交易推荐表格（Schema 校验 + 重试）
 echo "[4/5] 生成交易推荐..."
-/usr/bin/python3 "$SCRIPT_DIR/generate_trade_signals.py" "$DATE_TAG" 2>&1 || echo "[WARN] 交易推荐生成失败，继续"
+MAX_GEN_RETRIES=2
+GEN_RETRY=0
+GEN_OK=false
+while [ $GEN_RETRY -le $MAX_GEN_RETRIES ]; do
+    if /usr/bin/python3 "$SCRIPT_DIR/generate_trade_signals.py" "$DATE_TAG" 2>&1; then
+        GEN_OK=true
+        break
+    else
+        EXIT_CODE=$?
+        if [ $EXIT_CODE -eq 2 ]; then
+            echo "[RETRY] Schema 校验失败 (exit=$EXIT_CODE)，重试第 $((GEN_RETRY+1))/$MAX_GEN_RETRIES 次..."
+            # 重跑 trading_analysis 重新生成报告（可能格式差异导致解析失败）
+            /usr/bin/python3 trading_analysis_latest.py 2>&1 || echo "[WARN] 重新分析失败"
+            GEN_RETRY=$((GEN_RETRY+1))
+        else
+            echo "[WARN] 交易推荐生成失败 (exit=$EXIT_CODE)，跳过"
+            break
+        fi
+    fi
+done
+if [ "$GEN_OK" = false ]; then
+    echo "[ALERT] 交易推荐生成经 $MAX_GEN_RETRIES 次重试仍失败，阻断推送"
+    echo "# 🚨 交易推荐生成异常
+
+Schema 校验经 $MAX_GEN_RETRIES 次重试仍未通过，已阻断推送。
+时间: $(TZ=Asia/Shanghai date +%Y-%m-%d\ %H:%M:%S)" | python3 "$PUSH_SCRIPT" 2>/dev/null
+    exit 1
+fi
 
 # 步骤5: 拼装并推送
 echo "[5/5] 拼装推送..."

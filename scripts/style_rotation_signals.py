@@ -86,9 +86,7 @@ def _fetch_index_hist(symbol: str, name: str) -> Optional[pd.Series]:
     cache_file = os.path.join(DATA_CACHE, f"idx_{symbol.replace('.','_')}.csv")
     if os.path.exists(cache_file):
         try:
-            cached = pd.read_csv(cache_file, index_col=0)
-            cached.index = pd.to_datetime(cached.index, errors='coerce')
-            cached = cached.dropna()
+            cached = pd.read_csv(cache_file, index_col=0, parse_dates=True)
             if len(cached) > 0:
                 last_date = cached.index[-1].to_pydatetime().date()
                 today = NOW().date()
@@ -114,10 +112,12 @@ def _fetch_index_hist(symbol: str, name: str) -> Optional[pd.Series]:
         print(f"[style_rotation] fetch {name}({symbol}) failed", file=sys.stderr)
         return None
 
-    s = pd.Series(df['close'].values, index=pd.to_datetime(df.index))
+    s = pd.Series(df['close'].values, index=pd.to_datetime(df['date']))
     s = s.sort_index()
     os.makedirs(DATA_CACHE, exist_ok=True)
-    pd.DataFrame({'close': s.values}, index=s.index).to_csv(cache_file)
+    out = s.copy()
+    out.index = out.index.strftime('%Y-%m-%d')
+    out.to_csv(cache_file, index_label='date')
     return s
 
 

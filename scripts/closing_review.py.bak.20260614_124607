@@ -277,108 +277,7 @@ def summarize_cognition(prices, thresholds, overseas_dir, overseas_conf):
     return lines
 
 
-def review_signal_quality() -> list[str]:
-    """信号质量回顾：检查市场温度模块的数据源健康度 + 信号变化
-    返回可追加到复盘报告的文本行列表
-    """
-    lines = []
-    lines.append("### 信号源健康度")
-    lines.append("")
-    
-    try:
-        import sys
-        sys.path.insert(0, os.path.join(PROJECT_DIR, 'scripts'))
-        from style_rotation_signals import (
-            compute_market_temperature, DATA_CACHE
-        )
-        
-        temp = compute_market_temperature()
-        if not temp.signals:
-            lines.append("信号模块未产出任何指标")
-            return lines
-        
-        # 逐信号报告数据源状态
-        for s in temp.signals:
-            data_note = ""
-            siren = ""
-            if s.data_conf <= 2:
-                siren = "⚠️"
-                data_note = "— 数据置信度低，仅参考绝对值"
-            elif s.data_conf == 3:
-                siren = "💡"
-                data_note = "— 使用了替代数据源"
-            lines.append(f"{s.emoji()} {s.name}: {s.value} {s.conf_tag()} {siren}")
-            if data_note:
-                lines.append(f"  {data_note}")
-        
-        lines.append("")
-        
-        # 缓存文件状态检查
-        cache_health = []
-        for fname in ['idx_sh000300.csv', 'idx_sh000906.csv', 'idx_sh000985.csv']:
-            fpath = os.path.join(DATA_CACHE, fname)
-            if os.path.exists(fpath):
-                size = os.path.getsize(fpath)
-                rows = 0
-                try:
-                    import pandas as pd
-                    c = pd.read_csv(fpath, index_col=0)
-                    rows = len(c)
-                    try:
-                        idx_dt = pd.to_datetime(c.index, errors='coerce').dropna()
-                        last_dt = str(idx_dt[-1])[:10] if len(idx_dt) > 0 else '?'
-                    except Exception:
-                        last_dt = '?'
-                except Exception:
-                    last_dt = '?'
-                cache_health.append(f"{fname}: {rows}行, 最新{last_dt}, {size/1024:.0f}KB")
-            else:
-                cache_health.append(f"{fname}: 缺失")
-        
-        lines.append(f"缓存: {' | '.join(cache_health)}")
-        lines.append("")
-        
-        # 与昨日信号对比
-        today_tag = NOW.strftime("%Y%m%d")
-        today_file = os.path.join(PROJECT_DIR, 'logs', 'cognition_daily', f'{today_tag}.json')
-        if os.path.exists(today_file):
-            with open(today_file) as f:
-                prev = json.load(f)
-            prev_signals = prev.get('market_temperature', {}).get('signals', [])
-            if prev_signals:
-                for s in temp.signals:
-                    for ps in prev_signals:
-                        if ps.get('name') == s.name:
-                            dv_old = ps.get('value', '')
-                            dv_new = s.value
-                            dc_old = ps.get('data_conf', 0)
-                            dc_new = s.data_conf
-                            if dv_old != dv_new:
-                                lines.append(f"📊 {s.name}: {dv_old} → {dv_new}")
-                            if dc_old != dc_new:
-                                lines.append(f"📈 {s.name}数据置信度: {dc_old}星 → {dc_new}星")
-                            break
-        
-        # 将当日信号写入 cognition_daily 供明天对比
-        daily_dir = os.path.join(PROJECT_DIR, 'logs', 'cognition_daily')
-        os.makedirs(daily_dir, exist_ok=True)
-        daily_file = os.path.join(daily_dir, f'{today_tag}.json')
-        existing = {}
-        if os.path.exists(daily_file):
-            try:
-                with open(daily_file) as f:
-                    existing = json.load(f)
-            except Exception:
-                pass
-        existing['market_temperature'] = temp.to_dict()
-        with open(daily_file, 'w') as f:
-            json.dump(existing, f, indent=2, ensure_ascii=False)
-        
-    except Exception as e:
-        lines.append(f"信号质量回顾获取失败: {e}")
-    
-    lines.append("")
-    return lines
+def build_report(prices, thresholds, overseas_dir, overseas_conf):
     """构建收盘复盘报告 — 三段式结构"""
     lines = []
     lines.append(f"## 收盘复盘 · {NOW.strftime('%-m/%-d')}")
@@ -446,11 +345,7 @@ def review_signal_quality() -> list[str]:
     lines.append(f"认知标签：{' | '.join(insights)}")
     lines.append("")
 
-    # ── 信号源健康度 ──
-    sig_health = review_signal_quality()
-    lines.extend(sig_health)
-
-    # ── 第四段：本周認知积累（追加式） ──
+    # ── 第四段：本周认知积累（追加式） ──
     weekly_file = f"{PROJECT_DIR}/logs/cognition_weekly_{NOW.strftime('%Y-W%U')}.md"
     os.makedirs(os.path.dirname(weekly_file), exist_ok=True)
     today_entry = f"- {NOW.strftime('%m/%d')} {tag}"
