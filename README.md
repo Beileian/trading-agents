@@ -1,12 +1,7 @@
-# TradingAgents 部署
+# trading-agents
 
-## 项目定位
-TauricResearch/TradingAgents 多智能体交易研究框架部署
-用于A股模拟交易分析，对接 DeepSeek API
+代码已迁移至独立仓库：https://github.com/Beileian/trading-agents
 
-## 部署信息
-- 部署时间: 2026-06-04 18:42:15
-- 数据源: Yahoo Finance (A股 .SZ/.SS)
-- LLM Provider: DeepSeek
-- 监控标的: 平安银行(000001.SZ)、贵州茅台(600519.SS)、五粮液(000858.SZ)、同花顺(300033.SZ)、海康威视(002415.SZ)
+本地路径：`/root/.openclaw/workspace/projects/trading-agents`
 
+每次脚本修改后在 trading-agents 目录下执行 `git push origin master` 即可同步到 GitHub。

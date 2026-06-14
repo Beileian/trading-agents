@@ -1,0 +1,44 @@
+{
+  "market_temperature": {
+    "date": "2026-06-14",
+    "signals": [
+      {
+        "name": "股债性价比",
+        "value": "5.0%",
+        "pct_rank": 50.0,
+        "signal": "neutral",
+        "note": "股债性价比中性(5.0%)",
+        "def_conf": 4,
+        "data_conf": 2
+      },
+      {
+        "name": "偏股情绪",
+        "value": "1.9%",
+        "pct_rank": 43.7,
+        "signal": "neutral",
+        "note": "中证800三年年化1.9%，正常",
+        "def_conf": 3,
+        "data_conf": 3
+      },
+      {
+        "name": "红利息差",
+        "value": "2.82%",
+        "pct_rank": 5.0,
+        "signal": "oversold",
+        "note": "红利息差2.82%，高溢价",
+        "def_conf": 3,
+        "data_conf": 2
+      },
+      {
+        "name": "五年之锚",
+        "value": "偏离15.0%",
+        "pct_rank": 81.7,
+        "signal": "overheat",
+        "note": "偏离15.0%，高估建议减仓",
+        "def_conf": 2,
+        "data_conf": 4
+      }
+    ],
+    "summary": "市场温度：中性 | 1偏冷/1偏热"
+  }
+}
