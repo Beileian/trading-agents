@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-托董交易推荐系统 v2.2.1 — 段落式输出（触发/风险催化分离 + IMA文章内摘要 + 复盘缝入标的）
+托董交易推荐系统 v2.3.0 — Schema校验 + 自动重试（Harness第一步）
 
 乖离率体系: BIAS_20 判断偏离 → 5日趋势方向 → 修正支撑/阻力触发逻辑
 原则: 支撑≠买进, 阻力≠卖出。乖离率告诉你"车开多快"。
@@ -321,6 +321,64 @@ def match_external_signals(symbol: str, overseas_text: str | None,
     return trunc(risk_desc), trunc(catalyst_desc)
 
 
+def validate_records(records: list) -> tuple[bool, list[str]]:
+    """
+    Schema 校验：逐标的必需字段 + 合理性检查。
+    返回 (通过, 错误列表)
+    """
+    errors = []
+    required_fields = ['name', 'price', 'advice', 'pos', 'trigger']
+    valid_advice = {'买入', '卖出', '持有', 'hold'}
+    
+    is_new_stock = lambda r: '首日纳入' in str(r.get('trigger', ''))
+    
+    for i, r in enumerate(records):
+        name = r.get('name', f'#{i}')
+        new_stock = is_new_stock(r)
+        # 必需字段非空
+        for f in required_fields:
+            val = r.get(f, '')
+            if not val or val == '-':
+                # 首日纳入：price/pos/trigger 允许占位
+                if new_stock and f in ('price', 'pos', 'trigger'):
+                    continue
+                errors.append(f"{name}: 缺失字段 {f} (值={val})")
+        
+        # 建议合法性
+        advice_raw = r.get('advice', '')
+        advice_clean = advice_raw.replace('**', '').strip()
+        if advice_clean not in valid_advice:
+            errors.append(f"{name}: 交易建议异常 ({advice_raw})")
+        
+        # 仓位合理性 (0-100)
+        if not new_stock:
+            pos_str = r.get('pos', '').replace('%', '').strip()
+            try:
+                pos_val = float(pos_str)
+                if pos_val < 0 or pos_val > 100:
+                    errors.append(f"{name}: 仓位异常 ({pos_str})")
+            except (ValueError, TypeError):
+                errors.append(f"{name}: 仓位非数值 ({pos_str})")
+        
+        # 价格合理性 (正数)
+        if not new_stock:
+            price_str = r.get('price', '').replace('¥', '').replace(',', '').strip()
+            if price_str and price_str != '-':
+                try:
+                    price_val = float(price_str)
+                    if price_val <= 0:
+                        errors.append(f"{name}: 价格异常 ({price_str})")
+                except (ValueError, TypeError):
+                    errors.append(f"{name}: 价格非数值 ({price_str})")
+    
+    # 全局检查：至少一半标的有有效触发条件（非首日纳入）
+    valid_triggers = sum(1 for r in records if r.get('trigger') and r['trigger'] != '-' and '首日纳入' not in r.get('trigger', ''))
+    if len(records) >= 4 and valid_triggers < len(records) / 2:
+        errors.append(f"全局: 有效触发条件不足 ({valid_triggers}/{len(records)})")
+    
+    return len(errors) == 0, errors
+
+
 def main():
     date_str = sys.argv[1] if len(sys.argv) > 1 else datetime.now(TZ).strftime('%Y%m%d')
     analysis_file = f"{PROJECT_DIR}/reports/trading_analysis_{date_str}.md"
@@ -374,12 +432,33 @@ def main():
             'trigger': tech_trigger, 'risk': risk_desc, 'catalyst': catalyst_desc,
         })
 
+    # ── Schema 校验 ──
+    passed, errors = validate_records(records)
+    if not passed:
+        print("\n⚠️ Schema 校验失败:")
+        for e in errors:
+            print(f"  - {e}")
+        sys.exit(2)
+
     # ═══════════════════════════════════════════════
     #  构建段落式输出
     # ═══════════════════════════════════════════════
     lines = []
     lines.append("交易推荐 · 开盘前推送")
     lines.append("")
+
+    # ── 市场温度与风格水位 (Phase 1) ──
+    try:
+        from style_rotation_signals import compute_market_temperature, format_compact_for_push
+        mkt_temp = compute_market_temperature()
+        if mkt_temp and mkt_temp.summary:
+            lines.append(mkt_temp.summary)
+            compact = format_compact_for_push(mkt_temp)
+            if compact:
+                lines.append(compact)
+            lines.append("")
+    except Exception as e:
+        print(f"[signals] style_rotation unavailable: {e}", file=sys.stderr)
 
     # ── 复盘摘要 200-300字 ──
     if last_review and last_review.get("review_summary"):
