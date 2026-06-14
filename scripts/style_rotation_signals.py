@@ -29,17 +29,26 @@ DATA_CACHE = os.path.join(PROJECT_DIR, "data", "cache")
 # ═══════════════════════════════════════════════════════════════
 
 class SignalLight:
-    def __init__(self, name, value, pct_rank, signal, note=""):
+    def __init__(self, name, value, pct_rank, signal, note="",
+                 def_conf=3, data_conf=3):
         self.name = name
         self.value = value
         self.pct_rank = pct_rank
         self.signal = signal  # 'warm'|'neutral'|'cold'|'overheat'|'oversold'
         self.note = note
+        self.def_conf = def_conf    # 指标定义置信度 1-5
+        self.data_conf = data_conf  # 本次数据取值置信度 1-5
 
     def emoji(self):
         m = {'overheat': '🔴', 'warm': '🟠', 'neutral': '⚪',
              'cold': '🔵', 'oversold': '💎'}
         return m.get(self.signal, '⚪')
+
+    def stars(self, n):
+        return '★' * n + '☆' * (5 - n)
+
+    def conf_tag(self):
+        return f"定义{self.stars(self.def_conf)} 数据{self.stars(self.data_conf)}"
 
 
 class MarketTemperature:
@@ -59,7 +68,8 @@ class MarketTemperature:
         return {
             "date": self.date,
             "signals": [{"name": s.name, "value": s.value, "pct_rank": round(s.pct_rank, 1),
-                          "signal": s.signal, "note": s.note} for s in self.signals],
+                          "signal": s.signal, "note": s.note,
+                          "def_conf": s.def_conf, "data_conf": s.data_conf} for s in self.signals],
             "summary": self.summary
         }
 
@@ -204,7 +214,8 @@ def calc_equity_bond_spread() -> Optional[SignalLight]:
         else:
             note = f"股债性价比极低({spread:.1f}%)，债券优于股票"
 
-        return SignalLight("股债性价比", f"{spread:.1f}%", rank, signal, note)
+        return SignalLight("股债性价比", f"{spread:.1f}%", rank, signal, note,
+                          def_conf=4, data_conf=2)
 
     except Exception as e:
         print(f"[style_rotation] equity_bond_spread: {e}", file=sys.stderr)
@@ -265,7 +276,8 @@ def calc_bias_fund_return() -> Optional[SignalLight]:
             if rols:
                 rank = pct_rank(pd.Series(rols), cagr)
 
-        return SignalLight("偏股情绪", f"{cagr:.1f}%", rank, signal, note)
+        return SignalLight("偏股情绪", f"{cagr:.1f}%", rank, signal, note,
+                          def_conf=3, data_conf=3)
 
     except Exception as e:
         print(f"[style_rotation] bias_fund: {e}", file=sys.stderr)
@@ -325,7 +337,8 @@ def calc_dividend_premium() -> Optional[SignalLight]:
         else:
             note = f"红利息差{spread:.2f}%，负溢价"
 
-        return SignalLight("红利息差", f"{spread:.2f}%", rank, signal, note)
+        return SignalLight("红利息差", f"{spread:.2f}%", rank, signal, note,
+                          def_conf=3, data_conf=2)
 
     except Exception as e:
         print(f"[style_rotation] dividend_premium: {e}", file=sys.stderr)
@@ -373,7 +386,8 @@ def calc_five_year_anchor() -> Optional[SignalLight]:
         hist_dev = hist_dev.dropna()
         rank = pct_rank(hist_dev, deviation)
 
-        return SignalLight("五年之锚", f"偏离{deviation:.1f}%", rank, signal, note)
+        return SignalLight("五年之锚", f"偏离{deviation:.1f}%", rank, signal, note,
+                          def_conf=2, data_conf=4)
 
     except Exception as e:
         print(f"[style_rotation] five_year_anchor: {e}", file=sys.stderr)
@@ -417,14 +431,14 @@ def format_brief_for_push(temp: MarketTemperature) -> str:
         return ""
     lines = ["市场温度与风格水位"]
     for s in temp.signals:
-        lines.append(f"{s.emoji()} {s.name}: {s.value}（{s.pct_rank:.0f}%分位）— {s.note}")
+        lines.append(f"{s.emoji()} {s.name}: {s.value}（{s.pct_rank:.0f}%分位）【{s.conf_tag()}】\n  → {s.note}")
     return "\n".join(lines)
 
 
 def format_compact_for_push(temp: MarketTemperature) -> str:
     if not temp.signals:
         return ""
-    items = [f"{s.emoji()}{s.name}={s.value}" for s in temp.signals]
+    items = [f"{s.emoji()}{s.name}={s.value}({s.pct_rank:.0f}%)[{s.def_conf}/{s.data_conf}]" for s in temp.signals]
     return " | ".join(items)
 
 
