@@ -17,20 +17,25 @@ trap 'exit_code=$?; echo "# ⚠️ 收盘复盘异常\n\n脚本 exit=$exit_code\
 
 echo "=== A股收盘复盘 $DATE_STR ==="
 
-# 步骤1: 运行收盘复盘
-echo "[1/2] 运行收盘复盘..."
+# 步骤1: 更新虚拟盘收盘净值
+echo "[1/3] 虚拟盘收盘更新..."
+/usr/bin/python3 "$SCRIPT_DIR/paper_trading.py" close "$DATE_STR" 2>&1 || echo "[WARN] 虚拟盘收盘更新失败"
+
+# 步骤2: 运行收盘复盘
+echo "[2/3] 运行收盘复盘..."
 /usr/bin/python3 "$SCRIPT_DIR/closing_review.py" 2>&1 || {
     echo "[WARN] 收盘复盘脚本失败，使用降级推送"
 }
 
 # 步骤2: 推送（含降级）
 REVIEW_FILE="$REPORT_DIR/closing_review_${DATE_TAG}.md"
+PAPER_STATE="$REPORT_DIR/paper_state.json"
 
 if [ -f "$REVIEW_FILE" ] && [ -s "$REVIEW_FILE" ]; then
-    echo "[2/2] 复盘报告推送中..."
+    echo "[3/3] 复盘报告推送中..."
     cat "$REVIEW_FILE" | python3 "$PUSH_SCRIPT"
 else
-    echo "[2/2] 复盘文件缺失，推送降级简报..."
+    echo "[3/3] 复盘文件缺失，推送降级简报..."
     # 降级方案：推送简单收盘提醒
     cat << EOF | python3 "$PUSH_SCRIPT"
 # 📉 A股收盘复盘 · ${DATE_STR}

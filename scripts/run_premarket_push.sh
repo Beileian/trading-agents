@@ -61,12 +61,8 @@ sed -i "s/2021-06-04 至 2026-06-04/2021-06-04 至 $DATE_STR/" trading_analysis_
 echo "[2/5] 提取IMA知识库观点..."
 /usr/bin/python3 "$SCRIPT_DIR/extract_ima_opinions.py" 2>&1 || echo "[WARN] IMA提取失败，继续"
 
-# 步骤3: 外盘信号
-echo "[3/5] 提取外盘信号..."
-/usr/bin/python3 /root/.openclaw/workspace/projects/overseas-morning-brief/scripts/extract_signal.py 2>&1 || echo "[WARN] 外盘信号提取失败，继续"
-
-# 步骤4: 交易推荐表格（Schema 校验 + 重试）
-echo "[4/5] 生成交易推荐..."
+# 步骤3: 交易推荐表格（Schema 校验 + 重试）
+echo "[3/5] 生成交易推荐..."
 MAX_GEN_RETRIES=2
 GEN_RETRY=0
 GEN_OK=false
@@ -96,6 +92,10 @@ Schema 校验经 $MAX_GEN_RETRIES 次重试仍未通过，已阻断推送。
     exit 1
 fi
 
+# 步骤4: 虚拟盘执行（基于今日交易推荐）
+echo "[4/5] 虚拟盘执行..."
+/usr/bin/python3 "$SCRIPT_DIR/paper_trading.py" execute "$DATE_STR" 2>&1 || echo "[WARN] 虚拟盘执行失败"
+
 # 步骤5: 拼装并推送
 echo "[5/5] 拼装推送..."
 SIGNAL_FILE="/root/.openclaw/workspace/projects/overseas-morning-brief/reports/overseas_signal_${DATE_STR}.md"
@@ -107,14 +107,6 @@ HAS_CONTENT=false
 # 构建推送内容头部
 echo "# A股开盘前分析 · $DATE_STR" > "$PUSH_FILE"
 echo "" >> "$PUSH_FILE"
-
-if [ -f "$SIGNAL_FILE" ]; then
-    echo "## 隔夜外盘信号" >> "$PUSH_FILE"
-    # 跳过文件自身的 ## 标题行，只取内容；同时清理装饰图标
-    sed '/^## /d' "$SIGNAL_FILE" | sed 's/🌐//g; s/📊//g; s/📰//g; s/💡//g; s/🔥//g; s/⭐//g; s/⚠️//g; s/🎯//g; s/🧘//g' >> "$PUSH_FILE"
-    echo "" >> "$PUSH_FILE"
-    HAS_CONTENT=true
-fi
 
 if [ -f "$TRADE_FILE" ]; then
     echo "## 交易推荐" >> "$PUSH_FILE"
@@ -167,19 +159,8 @@ for sec_name, articles in sections.items():
     HAS_CONTENT=true
 fi
 
-# 生成复盘收获（基于外盘信号的关键数据点）
-REVIEW=""
-if [ -f "$SIGNAL_FILE" ]; then
-    VIX_LINE=$(grep -oP 'VIX[^)]*' "$SIGNAL_FILE" 2>/dev/null | head -1 | cut -c1-80)
-    [ -n "$VIX_LINE" ] && REVIEW="基于 $VIX_LINE"
-fi
-if [ -n "$REVIEW" ]; then
-    echo "" >> "$PUSH_FILE"
-    echo "> $REVIEW —— 收盘复盘将验证方向判断。*AI辅助分析，不构成投资建议*" >> "$PUSH_FILE"
-else
-    echo "" >> "$PUSH_FILE"
-    echo "> *收盘复盘将于15:30自动验证今日判断。AI辅助分析，不构成投资建议*" >> "$PUSH_FILE"
-fi
+echo "" >> "$PUSH_FILE"
+echo "> *外盘信号已在8:05推送，收盘复盘将于15:30自动验证今日判断。AI辅助分析，不构成投资建议*" >> "$PUSH_FILE"
 
 if [ "$HAS_CONTENT" = true ]; then
     echo "推送内容已就绪，推送到钉钉群..."

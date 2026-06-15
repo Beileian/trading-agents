@@ -239,11 +239,19 @@ def summarize_cognition(prices, thresholds, overseas_dir, overseas_conf):
             or (bullish and actual_dir == "偏多")
         ) else "偏离"
 
-        lines.append(f"外盘研判：预判 {overseas_dir}（置信度 {overseas_conf or '?'}）→ 实际 {actual_dir} {dir_match}，三大指数平均 {avg_idx_chg:+.2f}%")
+        lines.append(f"外盘研判：预判 {overseas_dir}（置信度 {overseas_conf or '?'}）→ 实际 {actual_dir} {dir_match}")
+        lines.append(f"三大指数：上证50 {index_codes['上证50']:+.2f}% / 沪深300 {index_codes['沪深300']:+.2f}% / 科创50 {index_codes['科创50']:+.2f}%（均 {avg_idx_chg:+.2f}%）")
 
-    # ── 2. 标的交叉对比：早盘建议 vs 实际走势 ──
-    sell_wrong = []  # 建议卖出但实际收涨
-    hold_right = []  # 建议持有且方向合理
+    # ── 2. 极端波动检测 ──
+    extreme_stocks = []
+    for name, p in prices.items():
+        if abs(p["chg_pct"]) >= 3:
+            extreme_stocks.append(f"{name} {p['chg_pct']:+.2f}%")
+    if extreme_stocks:
+        lines.append(f"极端波动（|涨跌|≥3%）：{'，'.join(extreme_stocks)}")
+
+    # ── 3. 标的交叉对比：早盘建议 vs 实际走势 ──
+    sell_wrong = []
     for name in ALL_NAMES:
         if name not in prices or name not in thresholds:
             continue
@@ -253,36 +261,23 @@ def summarize_cognition(prices, thresholds, overseas_dir, overseas_conf):
         chg = p["chg_pct"]
         if op == "sell" and chg > 0.5:
             sell_wrong.append(f"{name} +{chg:.1f}%")
-        elif op == "hold" and abs(chg) < 2:
-            hold_right.append(name)
     if sell_wrong:
-        lines.append(f"早盘卖出建议 {len(sell_wrong)} 只标的实际收涨：{'，'.join(sell_wrong)}")
-
-    # ── 3. 极端波动检测 ──
-    extreme_stocks = []
-    for name, p in prices.items():
-        if abs(p["chg_pct"]) >= 3:
-            extreme_stocks.append(f"{name} {p['chg_pct']:+.2f}%")
-    if extreme_stocks:
-        lines.append(f"极端波动（|涨跌|≥3%）：{'，'.join(extreme_stocks)}")
+        lines.append(f"卖出误判：{len(sell_wrong)} 只（{'，'.join(sell_wrong)}）")
 
     # ── 4. 触发穿越 ──
     breaches = check_breaches(prices, thresholds)
     if breaches:
+        b_names = {b['name'] for b in breaches}
         b_lines = [b['summary'] for b in breaches]
-        lines.append(f"触发穿越 {len(breaches)} 条：{'；'.join(b_lines)}")
+        lines.append(f"触发穿越：{len(breaches)} 条 — {'；'.join(b_lines)}")
     else:
         lines.append("触发穿越：无")
 
     return lines
 
 
-def review_signal_quality() -> list[str]:
-    """信号质量回顾：检查市场温度模块的数据源健康度 + 信号变化
-    返回可追加到复盘报告的文本行列表
-    """
     lines = []
-    lines.append("### 信号源健康度")
+    lines.append("**⑥ 市场温度计**")
     lines.append("")
     
     try:
@@ -297,50 +292,21 @@ def review_signal_quality() -> list[str]:
             lines.append("信号模块未产出任何指标")
             return lines
         
-        # 逐信号报告数据源状态
+        # 逐信号报告，每行一条
         for s in temp.signals:
-            data_note = ""
-            siren = ""
+            note = ""
             if s.data_conf <= 2:
-                siren = "⚠️"
-                data_note = "— 数据置信度低，仅参考绝对值"
+                note = " [低置信]"
             elif s.data_conf == 3:
-                siren = "💡"
-                data_note = "— 使用了替代数据源"
-            lines.append(f"{s.emoji()} {s.name}: {s.value} {s.conf_tag()} {siren}")
-            if data_note:
-                lines.append(f"  {data_note}")
+                note = " [替代源]"
+            lines.append(f"{s.emoji()} {s.name}: {s.value} {s.conf_tag()}{note}")
         
-        lines.append("")
-        
-        # 缓存文件状态检查
-        cache_health = []
-        for fname in ['idx_sh000300.csv', 'idx_sh000906.csv', 'idx_sh000985.csv']:
-            fpath = os.path.join(DATA_CACHE, fname)
-            if os.path.exists(fpath):
-                size = os.path.getsize(fpath)
-                rows = 0
-                try:
-                    import pandas as pd
-                    c = pd.read_csv(fpath, index_col=0)
-                    rows = len(c)
-                    try:
-                        idx_dt = pd.to_datetime(c.index, errors='coerce').dropna()
-                        last_dt = str(idx_dt[-1])[:10] if len(idx_dt) > 0 else '?'
-                    except Exception:
-                        last_dt = '?'
-                except Exception:
-                    last_dt = '?'
-                cache_health.append(f"{fname}: {rows}行, 最新{last_dt}, {size/1024:.0f}KB")
-            else:
-                cache_health.append(f"{fname}: 缺失")
-        
-        lines.append(f"缓存: {' | '.join(cache_health)}")
         lines.append("")
         
         # 与昨日信号对比
         today_tag = NOW.strftime("%Y%m%d")
         today_file = os.path.join(PROJECT_DIR, 'logs', 'cognition_daily', f'{today_tag}.json')
+        changes = []
         if os.path.exists(today_file):
             with open(today_file) as f:
                 prev = json.load(f)
@@ -351,13 +317,12 @@ def review_signal_quality() -> list[str]:
                         if ps.get('name') == s.name:
                             dv_old = ps.get('value', '')
                             dv_new = s.value
-                            dc_old = ps.get('data_conf', 0)
-                            dc_new = s.data_conf
                             if dv_old != dv_new:
-                                lines.append(f"📊 {s.name}: {dv_old} → {dv_new}")
-                            if dc_old != dc_new:
-                                lines.append(f"📈 {s.name}数据置信度: {dc_old}星 → {dc_new}星")
+                                changes.append(f"{s.emoji()} {s.name}: {dv_old} -> {dv_new}")
                             break
+        if changes:
+            lines.append(f"温度计变化: {'; '.join(changes)}")
+            lines.append("")
         
         # 将当日信号写入 cognition_daily 供明天对比
         daily_dir = os.path.join(PROJECT_DIR, 'logs', 'cognition_daily')
@@ -375,115 +340,79 @@ def review_signal_quality() -> list[str]:
             json.dump(existing, f, indent=2, ensure_ascii=False)
         
     except Exception as e:
-        lines.append(f"信号质量回顾获取失败: {e}")
+        lines.append(f"温度计获取失败: {e}")
     
     lines.append("")
     return lines
-    """构建收盘复盘报告 — 三段式结构"""
+
+
+def review_signal_quality() -> list[str]:
+    """市场温度计 + 昨日对比 + 本周认知写入，返回报告行列表"""
     lines = []
-    lines.append(f"## 收盘复盘 · {NOW.strftime('%-m/%-d')}")
+    lines.append("**⑥ 市场温度计**")
     lines.append("")
-
-    # ── 第一段：今日收盘数据 ──
-    lines.append("### 今日收盘")
-    lines.append("")
-    lines.append("| 标的 | 今收 | 涨跌% | 日内高 | 日内低 | 早盘建议 | 仓位 |")
-    lines.append("|------|------|-------|--------|--------|----------|------|")
-
-    for name in ALL_NAMES:
-        if name not in prices:
-            continue
-        p = prices[name]
-        t = thresholds.get(name, {})
-        op_map = {"sell": "🔴卖出", "buy": "🟢买入", "hold": "🟡持有"}
-        op_display = op_map.get(t.get("op", ""), "-")
-        pos_display = f"{t.get('pos', '-')}%" if t.get("pos", 0) > 0 else f"{t.get('pos', '-')}%"
-        lines.append(
-            f"| {name} | {p['price']:.2f} | {p['chg_pct']:+.2f}% "
-            f"| {p['high']:.2f} | {p['low']:.2f} "
-            f"| {op_display} | {pos_display} |"
+    
+    try:
+        import sys
+        sys.path.insert(0, os.path.join(PROJECT_DIR, 'scripts'))
+        from style_rotation_signals import (
+            compute_market_temperature, DATA_CACHE
         )
+        
+        temp = compute_market_temperature()
+        if not temp.signals:
+            lines.append("信号模块未产出任何指标")
+            return lines
+        
+        for s in temp.signals:
+            note = ""
+            if s.data_conf <= 2:
+                note = " [低]"
+            elif s.data_conf == 3:
+                note = " [替]"
+            lines.append(f"{s.emoji()} {s.name}: {s.value} {s.conf_tag()}{note}")
+        
+        lines.append("")
+        
+        # 与昨日对比
+        today_tag = NOW.strftime("%Y%m%d")
+        today_file = os.path.join(PROJECT_DIR, 'logs', 'cognition_daily', f'{today_tag}.json')
+        if os.path.exists(today_file):
+            with open(today_file) as f:
+                prev = json.load(f)
+            prev_signals = prev.get('market_temperature', {}).get('signals', [])
+            changes = []
+            if prev_signals:
+                for s in temp.signals:
+                    for ps in prev_signals:
+                        if ps.get('name') == s.name:
+                            if ps.get('value', '') != s.value:
+                                changes.append(f"{s.emoji()} {s.name}: {ps['value']} -> {s.value}")
+                            break
+            if changes:
+                lines.append(f"较昨日: {'; '.join(changes)}")
+                lines.append("")
+        
+        # 写入 cognition_daily 供明天对比
+        daily_dir = os.path.join(PROJECT_DIR, 'logs', 'cognition_daily')
+        os.makedirs(daily_dir, exist_ok=True)
+        daily_file = os.path.join(daily_dir, f'{today_tag}.json')
+        existing = {}
+        if os.path.exists(daily_file):
+            try:
+                with open(daily_file) as f:
+                    existing = json.load(f)
+            except Exception:
+                pass
+        existing['market_temperature'] = temp.to_dict()
+        with open(daily_file, 'w') as f:
+            json.dump(existing, f, indent=2, ensure_ascii=False)
+        
+    except Exception as e:
+        lines.append(f"温度计获取失败: {e}")
+    
     lines.append("")
-
-    # ── 第二段：研判验证 + 标的交叉对比 + 触发穿越 ──
-    cog_lines = summarize_cognition(prices, thresholds, overseas_dir, overseas_conf)
-    for cl in cog_lines:
-        lines.append(cl)
-    lines.append("")
-
-    # ── 第三段：今日认知增量 ──
-    morning_file = f"{OVERSEAS_DIR}/reports/morning_brief_{TODAY_DATE}.md"
-    tag = "无"
-    if os.path.exists(morning_file):
-        with open(morning_file) as f:
-            mb = f.read()
-        if "VIX" in mb:
-            tag = "VIX驱动型"
-        elif "非农" in mb or "就业" in mb:
-            tag = "宏观数据驱动型"
-        elif "财报" in mb:
-            tag = "财报驱动型"
-        else:
-            tag = "技术面驱动型"
-
-    # 从 cross-check 结果提取今日增量
-    sell_wrong_count = 0
-    for name in ALL_NAMES:
-        if name not in prices or name not in thresholds:
-            continue
-        p = prices[name]
-        t = thresholds[name]
-        if t.get("op") == "sell" and p["chg_pct"] > 0.5:
-            sell_wrong_count += 1
-
-    insights = [f"今日认知：{tag}"]
-    if sell_wrong_count >= 2:
-        insights.append(f"卖出建议集体失效（{sell_wrong_count}只收涨），反弹日信号")
-    breaches = check_breaches(prices, thresholds)
-    if not breaches:
-        insights.append("无触发穿越，盘面平稳")
-
-    lines.append(f"认知标签：{' | '.join(insights)}")
-    lines.append("")
-
-    # ── 信号源健康度 ──
-    sig_health = review_signal_quality()
-    lines.extend(sig_health)
-
-    # ── 第四段：本周認知积累（追加式） ──
-    weekly_file = f"{PROJECT_DIR}/logs/cognition_weekly_{NOW.strftime('%Y-W%U')}.md"
-    os.makedirs(os.path.dirname(weekly_file), exist_ok=True)
-    today_entry = f"- {NOW.strftime('%m/%d')} {tag}"
-    if breaches:
-        b_names = list(set(b['name'] for b in breaches))
-        today_entry += f"，穿越: {'、'.join(b_names)}"
-    if sell_wrong_count >= 2:
-        today_entry += f"，卖出集体失效({sell_wrong_count}只)"
-
-    # 追加今日条目
-    existing = []
-    if os.path.exists(weekly_file):
-        with open(weekly_file) as f:
-            existing = [l.strip() for l in f if l.strip().startswith("-")]
-    # 避免重复追加（当天已写）
-    existing_dates = {l[2:7] for l in existing if len(l) > 7}
-    today_key = NOW.strftime('%m/%d')
-    if today_key not in existing_dates:
-        existing.append(today_entry)
-    # 只保留最近5天
-    existing = existing[-5:]
-    with open(weekly_file, "w") as f:
-        f.write(f"# 本周认知积累 ({NOW.strftime('%Y-W%U')})\n")
-        for e in existing:
-            f.write(e + "\n")
-        f.write("\n")
-
-    if len(existing) > 1:
-        lines.append("本周认知：")
-        for e in existing:
-            lines.append(e)
-
-    return "\n".join(lines)
+    return lines
 
 
 def update_cognition_state(prices, thresholds, overseas_dir, overseas_conf):
@@ -704,13 +633,13 @@ def update_cognition_state(prices, thresholds, overseas_dir, overseas_conf):
     sell_str = ""
     if sell_wrong:
         sw = ",".join(sell_wrong)
-    sell_str = f" | 卖出误判 {sw}"
+        sell_str = f" | 卖出误判 {sw}"
 
     # Breach
     breach_str = ""
     if breach_names:
         bn = ",".join(breach_names)
-    breach_str = f" | 触发穿越{breach_count}条（{bn}）"
+        breach_str = f" | 触发穿越{breach_count}条（{bn}）"
 
     index_line = f"- [交易推荐](trade_signals_{TODAY_TAG}.md) — {op_str} | 外盘{overseas_str}{sell_str}{breach_str}"
 
@@ -757,6 +686,172 @@ def update_cognition_state(prices, thresholds, overseas_dir, overseas_conf):
         f.writelines(new_lines)
 
     return hint
+
+
+
+
+def build_report(prices, thresholds, overseas_dir, overseas_conf):
+    """组装完整收盘复盘报告 — 8段式结构"""
+    L = []  # 行列表
+    
+    # ═══ 标题 ═══
+    L.append(f"# A股收盘复盘 · {TODAY_DATE}")
+    L.append("")
+    
+    # ═══ 1. 今日指数 ═══
+    L.append("**① 今日指数**")
+    index_names = ["上证50", "沪深300", "科创50"]
+    idx_parts = []
+    for name in index_names:
+        if name in prices:
+            p = prices[name]
+            idx_parts.append(f"{name} {p['price']:.2f}（{p['chg_pct']:+.2f}%）")
+        else:
+            idx_parts.append(f"{name} 无数据")
+    L.append(" | ".join(idx_parts))
+    L.append("")
+    
+    # ═══ 2. 外盘验证 ═══
+    if overseas_dir:
+        bearish = "偏空" in overseas_dir or "看跌" in overseas_dir
+        bullish = "偏多" in overseas_dir or "看涨" in overseas_dir
+
+        index_codes = {}
+        for k in index_names:
+            if k in prices:
+                index_codes[k] = prices[k]["chg_pct"]
+
+        vals = [v for v in index_codes.values() if v is not None]
+        avg_idx_chg = sum(vals) / len(vals) if vals else 0
+
+        if avg_idx_chg < -0.5:
+            actual_dir = "偏空"
+        elif avg_idx_chg > 0.5:
+            actual_dir = "偏多"
+        else:
+            actual_dir = "震荡"
+
+        dir_match = "吻合" if (
+            (bearish and actual_dir == "偏空") or (bullish and actual_dir == "偏多")
+        ) else "偏离"
+
+        L.append("**② 外盘验证**")
+        L.append(f"预判 {overseas_dir}（{overseas_conf or '?'}）→ 实际 {actual_dir}，{dir_match}（三大指数均 {avg_idx_chg:+.2f}%）")
+        L.append("")
+    
+    # ═══ 3. 极端波动 ═══
+    extreme = [f"{name} {p['chg_pct']:+.2f}%" for name, p in prices.items() if abs(p["chg_pct"]) >= 3]
+    if extreme:
+        L.append("**③ 极端波动**（|涨跌|≥3%）")
+        L.append("，".join(extreme))
+        L.append("")
+    
+    # ═══ 4. 卖出误判 ═══
+    L.append("**④ 卖出误判**")
+    sell_wrong = []
+    for name in ALL_NAMES:
+        if name not in prices or name not in thresholds:
+            continue
+        if thresholds[name].get("op") == "sell" and prices[name]["chg_pct"] > 0.5:
+            sell_wrong.append(f"{name} +{prices[name]['chg_pct']:.1f}%")
+    if sell_wrong:
+        L.append(f"{len(sell_wrong)} 只：{'，'.join(sell_wrong)}")
+    else:
+        L.append("无")
+    L.append("")
+    
+    # ═══ 5. 价格穿越 ═══
+    L.append("**⑤ 价格穿越**")
+    breaches = check_breaches(prices, thresholds)
+    if breaches:
+        b_parts = [b['summary'] for b in breaches]
+        L.append(f"{len(breaches)} 条 — {'；'.join(b_parts)}")
+    else:
+        L.append("无")
+    L.append("")
+    
+    # ═══ 6. 市场温度计 ═══
+    try:
+        temp_lines = review_signal_quality()
+        # review_signal_quality 自带标题和内容
+        L.extend(temp_lines)
+    except Exception as e:
+        L.append("**⑥ 市场温度计**")
+        L.append(f"获取失败: {e}")
+        L.append("")
+    
+    # ═══ 7. 本周认知 ═══
+    weekly_file = f"{PROJECT_DIR}/logs/cognition_weekly_{NOW.strftime('%Y-W%U')}.md"
+    # 写入今日认知条目
+    morning_file = f"{PROJECT_DIR}/../overseas-morning-brief/reports/morning_brief_{TODAY_DATE}.md"
+    tag = "技术面"
+    if os.path.exists(morning_file):
+        with open(morning_file) as f:
+            mb = f.read()
+        if "VIX" in mb:
+            tag = "VIX驱动"
+        elif "非农" in mb or "就业" in mb:
+            tag = "宏观驱动"
+    sell_wrong_count = sum(1 for n in ALL_NAMES if n in prices and n in thresholds
+                          and thresholds[n].get("op") == "sell" and prices[n]["chg_pct"] > 0.5)
+    today_entry = f"{NOW.strftime('%m/%d')} {tag}"
+    if breaches:
+        b_names = list({b['name'] for b in breaches})
+        today_entry += f"，穿越 {'、'.join(b_names)}"
+    if sell_wrong_count >= 2:
+        today_entry += f"，卖出集体失效({sell_wrong_count})"
+    os.makedirs(os.path.dirname(weekly_file), exist_ok=True)
+    existing = []
+    if os.path.exists(weekly_file):
+        with open(weekly_file) as f:
+            existing = [l.strip() for l in f if l.strip().startswith("-")]
+    existing_dates = {l[2:7] for l in existing if len(l) > 7}
+    today_key = NOW.strftime('%m/%d')
+    if today_key not in existing_dates:
+        existing.append(f"- {today_entry}")
+    existing = existing[-5:]
+    with open(weekly_file, "w") as f:
+        f.write(f"# 本周认知积累 ({NOW.strftime('%Y-W%U')})\n")
+        for e in existing:
+            f.write(e + "\n")
+        f.write("\n")
+    if existing:
+        L.append("**⑦ 本周认知**")
+        for e in existing:
+            L.append(e)
+        L.append("")
+    
+    # ═══ 8. 虚拟盘 ═══
+    paper_state_file = f"{PROJECT_DIR}/reports/paper_state.json"
+    if os.path.exists(paper_state_file):
+        try:
+            import json as _json
+            with open(paper_state_file) as _f:
+                ps = _json.load(_f)
+            nv = ps.get("net_value", 1.0)
+            total = ps.get("total_assets", 0)
+            pct = (nv - 1) * 100
+            arrow = "↑" if nv >= 1.0 else "↓"
+            L.append("**⑧ 虚拟盘**")
+            L.append(f"净值 {nv:.4f} {arrow} · 总资产 ¥{total:,.0f} · 累计 {pct:+.2f}%")
+            pos = ps.get("positions", [])
+            if pos:
+                L.append("")
+                L.append("| 标的 | 股数 | 均价 | 现价 | 市值 | 浮盈 | 占比 |")
+                L.append("|------|------|------|------|------|------|------|")
+                for p in pos:
+                    ratio = p["market_value"] / total * 100 if total else 0
+                    L.append(f"| {p['name']} | {p['shares']} | {p['avg_cost']:.2f} | {p['current_price']:.2f} | {p['market_value']:.0f} | {p['unrealized_pnl']:+.0f} | {ratio:.1f}% |")
+            L.append("")
+        except Exception as e:
+            L.append("**⑧ 虚拟盘**")
+            L.append(f"读取失败: {e}")
+            L.append("")
+    
+    # ═══ 脚注 ═══
+    L.append(f"> *收盘复盘 · {TODAY_DATE} · AI辅助分析，不构成投资建议*")
+    
+    return "\n".join(L)
 
 
 def main():
