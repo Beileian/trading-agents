@@ -685,8 +685,94 @@ def update_cognition_state(prices, thresholds, overseas_dir, overseas_conf):
     with open(index_file, "w") as f:
         f.writelines(new_lines)
 
+    # ── 6. 追加评估数据集（Step 1: 认知闭环 → 手动评估基准） ──
+    _append_eval_dataset(state, prices, thresholds, overseas_dir, overseas_conf, extreme_stocks, sell_wrong, breaches, tag)
+
     return hint
 
+
+def _append_eval_dataset(state, prices, thresholds, overseas_dir, overseas_conf, extreme_stocks, sell_wrong, breaches, tag):
+    """将当日结构化复盘数据追加到 cognition_dataset.jsonl"""
+    from pathlib import Path
+    eval_dir = Path(PROJECT_DIR) / "data" / "evaluation"
+    eval_dir.mkdir(parents=True, exist_ok=True)
+    dataset_file = eval_dir / "cognition_dataset.jsonl"
+
+    # 加载今日温度计
+    temp_signals = {}
+    daily_file = Path(PROJECT_DIR) / "logs" / "cognition_daily" / f"{TODAY_TAG}.json"
+    if daily_file.exists():
+        try:
+            with open(daily_file) as f:
+                daily = json.load(f)
+            for s in daily.get("market_temperature", {}).get("signals", []):
+                temp_signals[s["name"]] = s["signal"]
+        except Exception:
+            pass
+
+    # 提取交易推荐摘要
+    total_sell = sum(1 for n in ALL_NAMES if n in thresholds and thresholds[n].get("op") == "sell")
+    total_buy = sum(1 for n in ALL_NAMES if n in thresholds and thresholds[n].get("op") == "buy")
+    total_hold = sum(1 for n in ALL_NAMES if n in thresholds and thresholds[n].get("op") == "hold"
+                     and thresholds[n].get("op") not in ("sell", "buy"))
+
+    # 实际方向
+    overseas_actual = None
+    if overseas_dir:
+        idx_pcts = [prices[n]["chg_pct"] for n in ["上证50", "沪深300", "科创50"] if n in prices]
+        avg_idx = sum(idx_pcts) / len(idx_pcts) if idx_pcts else 0
+        if avg_idx < -0.5:
+            overseas_actual = "偏空"
+        elif avg_idx > 0.5:
+            overseas_actual = "偏多"
+        else:
+            overseas_actual = "震荡"
+
+    direction_match = "吻合" if (
+        overseas_dir and overseas_actual and (
+            ("偏多" in overseas_dir and overseas_actual == "偏多") or
+            ("偏空" in overseas_dir and overseas_actual == "偏空")
+        )
+    ) else ("偏离" if overseas_dir and overseas_actual else None)
+
+    # Build record
+    record = {
+        "date": TODAY_TAG,
+        "input": {
+            "overseas_signal": overseas_dir,
+            "overseas_confidence": overseas_conf,
+            "temperature": temp_signals if temp_signals else {},
+            "trade_recommendations": f"{total_buy}只买入/{total_hold}只持有/{total_sell}只卖出",
+        },
+        "output": {
+            "sh50_chg": round(prices["上证50"]["chg_pct"], 2) if "上证50" in prices else None,
+            "hs300_chg": round(prices["沪深300"]["chg_pct"], 2) if "沪深300" in prices else None,
+            "kc50_chg": round(prices["科创50"]["chg_pct"], 2) if "科创50" in prices else None,
+            "extreme_stocks": extreme_stocks,
+            "sell_wrong_names": sell_wrong,
+            "breach_names": list(set(b["name"] for b in breaches)) if breaches else [],
+            "direction_match": direction_match,
+        },
+        "cognitive_tag": tag,
+    }
+
+    # Deduplicate: skip if same date already exists
+    existing_dates = set()
+    if dataset_file.exists():
+        with open(dataset_file) as f:
+            for line in f:
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    existing_dates.add(json.loads(line)["date"])
+                except Exception:
+                    pass
+
+    if TODAY_TAG not in existing_dates:
+        with open(dataset_file, "a") as f:
+            f.write(json.dumps(record, ensure_ascii=False) + "\n")
+        print(f"  评估数据集: 追加 {TODAY_TAG}")
 
 
 
