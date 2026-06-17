@@ -32,29 +32,72 @@ ZHITU_BASE = "https://api.zhituapi.com"
 ZHITU_TOKEN = "B0794D…73A9"
 
 def load_thresholds():
-    """从今日交易推荐报告提取支撑/阻力位"""
+    """从今日交易推荐报告提取支撑/阻力位
+    
+    支持两种格式:
+    1. 表格格式: | 标的 | ... | 支撑 | 阻力 |
+    2. 段落格式: 🟡 标的名  ... → 持有\n  支撑xxx / 阻力yyy
+    """
     thresholds = {}
     if not os.path.exists(SIGNALS_FILE):
         return thresholds
 
     with open(SIGNALS_FILE) as f:
-        for line in f:
-            line = line.strip()
-            if not line.startswith('|') or '标的' in line or '---' in line:
+        content = f.read()
+
+    # 先尝试段落格式: 匹配 "支撑xxx / 阻力yyy" 行
+    # 标的名称在前一行（如 "🟡 农业银行  6.68  ..."）
+    lines = content.split('\n')
+    for i, line in enumerate(lines):
+        line = line.strip()
+        # 匹配支撑/阻力行
+        m = re.search(r'支撑([\d.]+)\s*/\s*阻力([\d.]+)', line)
+        if not m:
+            continue
+        support = float(m.group(1))
+        resistance = float(m.group(2))
+
+        # 向前找最近的标的名称行（最多回溯 3 行）
+        name = None
+        for j in range(i-1, max(i-4, -1), -1):
+            prev = lines[j].strip()
+            if not prev or prev.startswith('---') or prev.startswith('>'):
                 continue
-            parts = [p.strip() for p in line.split('|')]
-            if len(parts) < 8:
-                continue
-            name = parts[1]
-            support = parts[4]
-            resistance = parts[5]
-            try:
-                thresholds[name] = {
-                    'support': float(support),
-                    'resistance': float(resistance)
-                }
-            except ValueError:
-                pass
+            # 匹配: 🟡 农业银行  6.68  乖离+3.0% →  持有
+            nm = re.match(r'[🟡🟢🔴🟠⚪]\s*(\S+)', prev)
+            if nm:
+                name = nm.group(1)
+                break
+
+        if name:
+            thresholds[name] = {
+                'support': support,
+                'resistance': resistance
+            }
+
+    # 如果段落格式提取到了，直接返回（优先）
+    if thresholds:
+        return thresholds
+
+    # 降级: 尝试表格格式（兼容旧版报告）
+    for line in content.split('\n'):
+        line = line.strip()
+        if not line.startswith('|') or '标的' in line or '---' in line:
+            continue
+        parts = [p.strip() for p in line.split('|')]
+        if len(parts) < 8:
+            continue
+        name = parts[1]
+        support = parts[4]
+        resistance = parts[5]
+        try:
+            thresholds[name] = {
+                'support': float(support),
+                'resistance': float(resistance)
+            }
+        except ValueError:
+            pass
+
     return thresholds
 
 def fetch_sina_prices():
@@ -185,26 +228,15 @@ def dedup_alerts(alerts):
     return new_alerts
 
 def push_alerts(alerts):
-    """推送告警到群"""
+    """输出预警到 stdout，由 Gateway Cron announce 机制推送到群"""
     if not alerts:
         return
 
-    chat_id = "cidY4mlx+J2kNFpTiWFgQ0gkg=="
-    lines = ["## ⚡ 盘中价格预警", ""]
+    lines = ["⚡ 盘中价格预警"]
     for a in alerts:
         lines.append(f"- {a['msg']}")
 
-    msg = '\n'.join(lines)
-
-    try:
-        subprocess.run([
-            OPENCLAW_BIN, 'message', 'send',
-            '--channel', 'dingtalk-connector',
-            '--target', f'chat:{chat_id}',
-            '--message', msg,
-        ], timeout=15, capture_output=True)
-    except:
-        pass
+    print('\n'.join(lines))
 
 def main():
     now = datetime.now(TZ)
