@@ -203,23 +203,47 @@ def check_breaches(prices, thresholds):
     return alerts
 
 def dedup_alerts(alerts):
-    """去重：同一标的同方向 30 分钟内不重复"""
+    """去重：同一标的同方向 30 分钟内不重复，跨日自动清理旧状态"""
     state_file = f"{PROJECT_DIR}/logs/price_alerts_state.json"
     os.makedirs(os.path.dirname(state_file), exist_ok=True)
 
+    today = datetime.now(TZ).strftime("%Y%m%d")
+    now = datetime.now(TZ).timestamp()
+
+    # 读取旧状态，清理非今日记录
     state = {}
     if os.path.exists(state_file):
         with open(state_file) as f:
-            state = json.load(f)
+            raw = json.load(f)
+        for key, val in raw.items():
+            # 新格式: "name_type_date" → 直接带日期标签
+            # 旧格式兼容: "name_type" → 加今日标签
+            if isinstance(val, dict):
+                # 新格式: {"ts": ..., "date": ...}
+                if val.get("date") == today and now - val.get("ts", 0) < 30 * 60:
+                    state[key] = val
+            else:
+                # 旧格式: 纯时间戳，加日期标签
+                if now - val < 30 * 60:
+                    state[f"{key}|{today}"] = {"ts": val, "date": today}
 
-    now = datetime.now(TZ).timestamp()
     new_alerts = []
-
     for a in alerts:
-        key = f"{a['name']}_{a['type']}"
-        last_time = state.get(key, 0)
+        key = f"{a['name']}_{a['type']}|{today}"
+        # 也查兼容旧key
+        old_key = f"{a['name']}_{a['type']}"
+        last_time = 0
+        if key in state:
+            last_time = state[key].get("ts", state[key]) if isinstance(state[key], dict) else state[key]
+        elif old_key in state:
+            # 兼容读
+            if isinstance(state.get(old_key), dict):
+                if state[old_key].get("date") == today:
+                    last_time = state[old_key].get("ts", 0)
+            else:
+                last_time = state.get(old_key, 0)
         if now - last_time > 30 * 60:
-            state[key] = now
+            state[key] = {"ts": now, "date": today}
             new_alerts.append(a)
 
     with open(state_file, 'w') as f:

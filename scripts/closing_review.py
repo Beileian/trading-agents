@@ -166,57 +166,102 @@ def fetch_close_prices():
 
 
 def load_thresholds():
-    """从今日交易推荐报告读取支撑/阻力/操作/仓位"""
+    """从今日交易推荐报告读取支撑/阻力/操作/仓位
+    兼容两种格式：段落式（v2.4.0+）和表格（旧版）"""
     signals_file = f"{PROJECT_DIR}/reports/trade_signals_{TODAY_TAG}.md"
     if not os.path.exists(signals_file):
         return {}
 
     thresholds = {}
     with open(signals_file) as f:
-        for line in f:
-            line = line.strip()
-            if not line.startswith("|") or "标的" in line or "---" in line:
-                continue
-            parts = [p.strip() for p in line.split("|")]
-            if len(parts) < 9:
-                continue
-            name = parts[1]
-            try:
-                support = float(parts[4]) if parts[4] and parts[4] != "-" else None
-            except ValueError:
-                support = None
-            try:
-                resistance = float(parts[5]) if parts[5] and parts[5] != "-" else None
-            except ValueError:
-                resistance = None
+        text = f.read()
 
-            # Extract operation from column 6 (1-indexed: name|price|bias|support|resist|op|pos|trigger)
-            op_raw = parts[6] if len(parts) > 6 else ""
+    # 段落式格式：
+    # 🟡 上证50  2913.99  乖离+0.3% ↑  持有
+    #   支撑2887.94 / 阻力2915.90
+    #   触发: 突破2915.90加仓 / 跌破2887.94减仓
+    lines = text.split('\n')
+    i = 0
+    while i < len(lines):
+        line = lines[i].strip()
+        # 匹配标的行：有价格和操作建议
+        m = re.match(r'^[🟢🟡🔴🟠⚪]\s*(.+?)\s+([\d.]+)\s+乖离', line)
+        if m:
+            name = m.group(1).strip()
+            # 下一行：支撑/阻力
+            sup = None
+            res = None
             op = "hold"
-            if "卖出" in op_raw:
-                op = "sell"
-            elif "买入" in op_raw:
-                op = "buy"
+            trigger = ""
+            pos = 0
+            # 从当前行提取操作建议
+            if '卖出' in line or '卖出' in line:
+                op = 'sell'
+            elif '买入' in line or '买入' in line:
+                op = 'buy'
+            # 看后续2行
+            for j in range(i+1, min(i+4, len(lines))):
+                sub = lines[j].strip()
+                if '支撑' in sub and '/' in sub:
+                    parts = re.findall(r'([\d.]+)', sub)
+                    if len(parts) >= 2:
+                        sup = float(parts[0])
+                        res = float(parts[1])
+                if '触发' in sub:
+                    trigger = sub.replace('触发:', '').replace('触发：', '').strip()
+                # 风险行跳过
+                if sub.startswith('风险'):
+                    continue
+            if name and (sup or res):
+                thresholds[name] = {
+                    "support": sup,
+                    "resistance": res,
+                    "op": op,
+                    "pos": pos,
+                    "trigger": trigger,
+                }
+        i += 1
 
-            # Position: extract from column 8 (e.g. "30%" -> 30)
-            try:
-                pos_str = parts[7].strip() if len(parts) > 7 else "0%"
-                # 取第一个数字部分
-                m = re.search(r'\d+', pos_str)
-                pos = int(m.group()) if m else 0
-            except (ValueError, IndexError):
-                pos = 0
+    if thresholds:
+        return thresholds
 
-            # Extract trigger from column 8
-            trigger = parts[8] if len(parts) > 8 else ""
-
-            thresholds[name] = {
-                "support": support,
-                "resistance": resistance,
-                "op": op,
-                "pos": pos,
-                "trigger": trigger,
-            }
+    # fallback：旧版表格格式
+    for line in text.split('\n'):
+        line = line.strip()
+        if not line.startswith("|") or "标的" in line or "---" in line:
+            continue
+        parts = [p.strip() for p in line.split("|")]
+        if len(parts) < 9:
+            continue
+        name = parts[1]
+        try:
+            support = float(parts[4]) if parts[4] and parts[4] != "-" else None
+        except ValueError:
+            support = None
+        try:
+            resistance = float(parts[5]) if parts[5] and parts[5] != "-" else None
+        except ValueError:
+            resistance = None
+        op_raw = parts[6] if len(parts) > 6 else ""
+        op = "hold"
+        if "卖出" in op_raw:
+            op = "sell"
+        elif "买入" in op_raw:
+            op = "buy"
+        try:
+            pos_str = parts[7].strip() if len(parts) > 7 else "0%"
+            m = re.search(r'\d+', pos_str)
+            pos = int(m.group()) if m else 0
+        except (ValueError, IndexError):
+            pos = 0
+        trigger = parts[8] if len(parts) > 8 else ""
+        thresholds[name] = {
+            "support": support,
+            "resistance": resistance,
+            "op": op,
+            "pos": pos,
+            "trigger": trigger,
+        }
     return thresholds
 
 
