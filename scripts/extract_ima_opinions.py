@@ -31,12 +31,12 @@ FINANCE_KEYWORDS = [
 
 # ── 权重衰减 ──
 def date_weight(note_date: str) -> float:
-    """当日=1.0, 每早一天衰减15%, 下限0.1"""
+    """当日=1.0, 等比衰减 factor=0.85^days, 下限0.1"""
     today = datetime.now(TZ_SHANGHAI).date()
     try:
         d = datetime.fromisoformat(note_date).date()
         days = (today - d).days
-        w = max(0.10, 1.0 - days * 0.15)
+        w = max(0.10, 0.85 ** days)
         return round(w, 2)
     except:
         return 0.30  # unknown date = low weight
