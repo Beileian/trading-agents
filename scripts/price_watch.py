@@ -255,22 +255,13 @@ def dedup_alerts(alerts):
 
     return new_alerts
 
-# 钉钉机器人推送（与 send_to_dingtalk.py 一致的 API）
-DINGTALK_APP_KEY = "dingmvin6gkm96gookpo"
-DINGTALK_APP_SECRET = "5l6HvoMYkAK3AMPMDYpvnVCP7X-jCKOIweQGY0re5tSZLpQlL4UpNZUE2KxJVqzA"
-DINGTALK_GROUP_CID = "cidY4mlx+J2kNFpTiWFgQ0gkg=="
-
-def _get_dingtalk_token():
-    """获取钉钉机器人 access token"""
-    resp = requests.post("https://api.dingtalk.com/v1.0/oauth2/accessToken", json={
-        "appKey": DINGTALK_APP_KEY,
-        "appSecret": DINGTALK_APP_SECRET
-    }, timeout=10)
-    resp.raise_for_status()
-    return resp.json()["accessToken"]
+# 钉钉推送统一入口（复用 send_to_dingtalk 模块的密钥管理）
+import sys
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from send_to_dingtalk import send_markdown
 
 def push_alerts(alerts):
-    """通过钉钉机器人 API 直接推送预警到群"""
+    """通过 send_to_dingtalk 统一模块推送预警到群"""
     if not alerts:
         return
 
@@ -280,28 +271,8 @@ def push_alerts(alerts):
     text = '\n'.join(lines)
 
     try:
-        token = _get_dingtalk_token()
-        resp = requests.post(
-            "https://api.dingtalk.com/v1.0/robot/groupMessages/send",
-            headers={
-                "x-acs-dingtalk-access-token": token,
-                "Content-Type": "application/json"
-            },
-            json={
-                "robotCode": DINGTALK_APP_KEY,
-                "openConversationId": DINGTALK_GROUP_CID,
-                "msgKey": "sampleMarkdown",
-                "msgParam": json.dumps({
-                    "title": "⚡ 盘中价格预警",
-                    "text": text
-                })
-            },
-            timeout=15
-        )
-        if resp.status_code == 200:
-            print(f"[price_watch] 预警已推送: {len(alerts)} 条")
-        else:
-            print(f"[price_watch] 推送失败: {resp.status_code} {resp.text}")
+        send_markdown(text, title="⚡ 盘中价格预警")
+        print(f"[price_watch] 预警已推送: {len(alerts)} 条")
     except Exception as e:
         print(f"[price_watch] 推送异常: {e}")
 
