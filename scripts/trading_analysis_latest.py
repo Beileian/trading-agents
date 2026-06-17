@@ -18,8 +18,8 @@ import requests
 
 # ── Config ──────────────────────────────────────────────
 CACHE_DIR = "/root/.openclaw/workspace/projects/trading-agents/logs/cache"
-REPORT_PATH = "/root/.openclaw/workspace/projects/trading-agents/reports/trading_analysis_20260616.md"
-OPINIONS_PATH = "/root/.openclaw/workspace/projects/trading-agents/reports/opinions_20260616.md"
+REPORT_PATH = "/root/.openclaw/workspace/projects/trading-agents/reports/trading_analysis_20260617.md"
+OPINIONS_PATH = "/root/.openclaw/workspace/projects/trading-agents/reports/opinions_20260617.md"
 DEEPSEEK_KEY = "sk-2fe07fda653b47c6997a51ea0fe842a0"
 DEEPSEEK_URL = "https://api.deepseek.com/chat/completions"
 DEEPSEEK_MODEL = "deepseek-chat"
@@ -34,10 +34,9 @@ SYMBOLS = [
     ("600795.SH", "国电电力", "stock"),
     ("000066.SZ", "中国长城", "stock"),
     ("600562.SH", "国睿科技", "stock"),
-    ("562500.SH", "中证机器人ETF", "index"),
 ]
 
-TODAY_STR = "2026-06-16"
+TODAY_STR = "2026-06-17"
 
 # ── Helpers ──────────────────────────────────────────────
 
@@ -372,7 +371,7 @@ def main():
     header = f"""# 📊 A股技术分析与交易决策报告
 
 **生成日期**: {TODAY_STR}
-**数据范围**: 2021-06-04 至 2026-06-16（约5年日线）
+**数据范围**: 2021-06-04 至 2026-06-17（约5年日线）
 **分析标的**: 7只（3指数 + 4个股）
 **分析模型**: DeepSeek-chat
 
