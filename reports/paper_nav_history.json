@@ -1,0 +1,227 @@
+[
+  {
+    "date": "2026-06-15",
+    "net_value": 0.977,
+    "total_assets": 97696.45,
+    "cash": 22026.75,
+    "pos_value": 75669.7,
+    "pnl": -2301.35,
+    "pnl_pct": -2.95,
+    "positions": [
+      {
+        "name": "科创50(科创50ETF华夏)",
+        "shares": 8500,
+        "avg_cost": 0.7142,
+        "current_price": 0.7142,
+        "market_value": 6070.7,
+        "unrealized_pnl": 0.0
+      },
+      {
+        "name": "农业银行",
+        "shares": 4000,
+        "avg_cost": 6.3733,
+        "current_price": 6.67,
+        "market_value": 26680.0,
+        "unrealized_pnl": 1186.8
+      },
+      {
+        "name": "中国银行",
+        "shares": 1200,
+        "avg_cost": 5.017,
+        "current_price": 6.13,
+        "market_value": 7356.0,
+        "unrealized_pnl": 1335.6
+      },
+      {
+        "name": "招商银行",
+        "shares": 400,
+        "avg_cost": 37.0704,
+        "current_price": 38.95,
+        "market_value": 15580.0,
+        "unrealized_pnl": 751.84
+      },
+      {
+        "name": "国电电力",
+        "shares": 300,
+        "avg_cost": 5.0067,
+        "current_price": 5.03,
+        "market_value": 1509.0,
+        "unrealized_pnl": 6.99
+      },
+      {
+        "name": "中国长城",
+        "shares": 600,
+        "avg_cost": 19.47,
+        "current_price": 16.19,
+        "market_value": 9714.0,
+        "unrealized_pnl": -1968.0
+      },
+      {
+        "name": "国睿科技",
+        "shares": 400,
+        "avg_cost": 23.9877,
+        "current_price": 21.9,
+        "market_value": 8760.0,
+        "unrealized_pnl": -835.08
+      },
+      {
+        "name": "中证机器人(机器人ETF华夏)",
+        "shares": 2500,
+        "avg_cost": 1.1118,
+        "current_price": 0,
+        "market_value": 0,
+        "unrealized_pnl": -2779.5
+      }
+    ]
+  },
+  {
+    "date": "2026-06-16",
+    "net_value": 0.9703,
+    "total_assets": 97028.45,
+    "cash": 22026.75,
+    "pos_value": 75001.7,
+    "pnl": -2969.35,
+    "pnl_pct": -3.81,
+    "positions": [
+      {
+        "name": "科创50(科创50ETF华夏)",
+        "shares": 8500,
+        "avg_cost": 0.7142,
+        "current_price": 0.7142,
+        "market_value": 6070.7,
+        "unrealized_pnl": 0.0
+      },
+      {
+        "name": "农业银行",
+        "shares": 4000,
+        "avg_cost": 6.3733,
+        "current_price": 6.58,
+        "market_value": 26320.0,
+        "unrealized_pnl": 826.8
+      },
+      {
+        "name": "中国银行",
+        "shares": 1200,
+        "avg_cost": 5.017,
+        "current_price": 6.04,
+        "market_value": 7248.0,
+        "unrealized_pnl": 1227.6
+      },
+      {
+        "name": "招商银行",
+        "shares": 400,
+        "avg_cost": 37.0704,
+        "current_price": 38.38,
+        "market_value": 15352.0,
+        "unrealized_pnl": 523.84
+      },
+      {
+        "name": "国电电力",
+        "shares": 300,
+        "avg_cost": 5.0067,
+        "current_price": 4.97,
+        "market_value": 1491.0,
+        "unrealized_pnl": -11.01
+      },
+      {
+        "name": "中国长城",
+        "shares": 600,
+        "avg_cost": 19.47,
+        "current_price": 16.4,
+        "market_value": 9840.0,
+        "unrealized_pnl": -1842.0
+      },
+      {
+        "name": "国睿科技",
+        "shares": 400,
+        "avg_cost": 23.9877,
+        "current_price": 21.7,
+        "market_value": 8680.0,
+        "unrealized_pnl": -915.08
+      },
+      {
+        "name": "中证机器人(机器人ETF华夏)",
+        "shares": 2500,
+        "avg_cost": 1.1118,
+        "current_price": 0,
+        "market_value": 0,
+        "unrealized_pnl": -2779.5
+      }
+    ]
+  },
+  {
+    "date": "2026-06-17",
+    "net_value": 1.0714,
+    "total_assets": 107144.75,
+    "cash": 22026.75,
+    "pos_value": 85118.0,
+    "pnl": 7146.95,
+    "pnl_pct": 9.17,
+    "positions": [
+      {
+        "name": "科创50(科创50ETF华夏)",
+        "shares": 8500,
+        "avg_cost": 0.7142,
+        "current_price": 1.844,
+        "market_value": 15674.0,
+        "unrealized_pnl": 9603.3
+      },
+      {
+        "name": "农业银行",
+        "shares": 4000,
+        "avg_cost": 6.3733,
+        "current_price": 6.53,
+        "market_value": 26120.0,
+        "unrealized_pnl": 626.8
+      },
+      {
+        "name": "中国银行",
+        "shares": 1200,
+        "avg_cost": 5.017,
+        "current_price": 5.94,
+        "market_value": 7128.0,
+        "unrealized_pnl": 1107.6
+      },
+      {
+        "name": "招商银行",
+        "shares": 400,
+        "avg_cost": 37.0704,
+        "current_price": 38.23,
+        "market_value": 15292.0,
+        "unrealized_pnl": 463.84
+      },
+      {
+        "name": "国电电力",
+        "shares": 300,
+        "avg_cost": 5.0067,
+        "current_price": 4.94,
+        "market_value": 1482.0,
+        "unrealized_pnl": -20.01
+      },
+      {
+        "name": "中国长城",
+        "shares": 600,
+        "avg_cost": 19.47,
+        "current_price": 17.81,
+        "market_value": 10686.0,
+        "unrealized_pnl": -996.0
+      },
+      {
+        "name": "国睿科技",
+        "shares": 400,
+        "avg_cost": 23.9877,
+        "current_price": 21.84,
+        "market_value": 8736.0,
+        "unrealized_pnl": -859.08
+      },
+      {
+        "name": "中证机器人(机器人ETF华夏)",
+        "shares": 2500,
+        "avg_cost": 1.1118,
+        "current_price": 0,
+        "market_value": 0,
+        "unrealized_pnl": -2779.5
+      }
+    ]
+  }
+]
