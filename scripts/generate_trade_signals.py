@@ -1,7 +1,9 @@
 #!/usr/bin/env python3
 """
-托董交易推荐系统 v2.3.0 — Schema校验 + 自动重试（Harness第一步）
+托董交易推荐系统 v2.4.0 — Schema校验 + 自动重试 + 实时开盘价
 
+v2.4.0: 实时开盘价三重保障 — 腾讯时间戳校验 + 新浪交叉 + 昨收fallback
+v2.3.0: Schema校验 + 自动重试（Harness第一步）
 乖离率体系: BIAS_20 判断偏离 → 5日趋势方向 → 修正支撑/阻力触发逻辑
 原则: 支撑≠买进, 阻力≠卖出。乖离率告诉你"车开多快"。
 """
@@ -70,6 +72,136 @@ TICKERS = [
     ("600795.SH", "国电电力"), ("000066.SZ", "中国长城"),
     ("600562.SH", "国睿科技"), ("562500.SH", "中证机器人"),
 ]
+
+# ═══ 实时开盘价拉取（v2.4.0）═══
+# 映射: ticker → (中文名, 腾讯代码)
+PREMARKET_TENCENT = {
+    "000016.SH": ("上证50", "sh000016"),
+    "000300.SH": ("沪深300", "sh000300"),
+    "000688.SH": ("科创50", "sh000688"),
+    "601288.SH": ("农业银行", "sh601288"),
+    "601988.SH": ("中国银行", "sh601988"),
+    "600036.SH": ("招商银行", "sh600036"),
+    "600795.SH": ("国电电力", "sh600795"),
+    "000066.SZ": ("中国长城", "sz000066"),
+    "600562.SH": ("国睿科技", "sh600562"),
+}
+
+def fetch_real_open_prices():
+    """
+    从腾讯+新浪拉取今日开盘价，三重保障：
+    ① 腾讯实时行情（主源）
+    ② 新浪实时行情（交叉校验）
+    ③ 昨收 fallback（网络异常时）
+    """
+    import requests
+    today_str = datetime.now(TZ).strftime("%Y-%m-%d")
+    result = {}
+
+    # 腾讯批量拉取
+    tc_codes = [v[1] for v in PREMARKET_TENCENT.values()]
+    tc_url = "http://qt.gtimg.cn/q=" + ",".join(tc_codes)
+    tc_data = {}
+    try:
+        resp = requests.get(tc_url, timeout=8)
+        resp.encoding = "gbk"
+        for line in resp.text.strip().split("\n"):
+            m = re.search(r'="(.+)"', line)
+            if not m:
+                continue
+            fields = m.group(1).split("~")
+            if len(fields) < 35:
+                continue
+            ts_date = fields[30] if len(fields) > 30 else ""
+            open_price = float(fields[5]) if fields[5] and fields[5] != "0.000" else None
+            prev_close = float(fields[4]) if fields[4] else None
+            tc_data[fields[2]] = {
+                "open": open_price, "prev_close": prev_close,
+                "date": ts_date, "source": "tencent"
+            }
+    except Exception as e:
+        print(f"[开盘价] 腾讯拉取失败: {e}")
+
+    # 新浪交叉校验
+    sina_codes = []
+    sina_name_map = {}
+    for ticker, (name, tc_code) in PREMARKET_TENCENT.items():
+        sina_code = tc_code  # 同格式
+        sina_codes.append(sina_code)
+        sina_name_map[sina_code] = (ticker, name)
+
+    sina_data = {}
+    try:
+        resp = requests.get("http://hq.sinajs.cn/list=" + ",".join(sina_codes),
+                          headers={"Referer": "https://finance.sina.com.cn"}, timeout=8)
+        resp.encoding = "gbk"
+        for line in resp.text.strip().split("\n"):
+            m = re.search(r'hq_str_(\w+)="(.+)"', line)
+            if not m:
+                continue
+            code, raw = m.group(1), m.group(2)
+            fields = raw.split(",")
+            if len(fields) < 6:
+                continue
+            sina_date = fields[30] if len(fields) > 30 else ""
+            open_price = float(fields[1]) if fields[1] and fields[1] != "0.000" else None
+            prev_close = float(fields[2]) if fields[2] else None
+            sina_data[code] = {
+                "open": open_price, "prev_close": prev_close,
+                "date": sina_date, "source": "sina"
+            }
+    except Exception as e:
+        print(f"[开盘价] 新浪拉取失败: {e}")
+
+    # 合并裁决
+    for ticker, (name, tc_code) in PREMARKET_TENCENT.items():
+        tc = tc_data.get(tc_code[2:], {})  # 腾讯key是纯数字
+        # 也尝试带前缀匹配
+        if not tc:
+            for k, v in tc_data.items():
+                if tc_code[2:] in k:
+                    tc = v
+                    break
+        sina = sina_data.get(tc_code, {})
+
+        open_price = None
+        source = "fallback"
+
+        # ① 优先腾讯（时间戳匹配）
+        if tc.get("open") and tc.get("date") == today_str:
+            open_price = tc["open"]
+            source = "tencent"
+
+        # ② 新浪交叉校验
+        if sina.get("open") and sina.get("date") == today_str:
+            if open_price is None:
+                open_price = sina["open"]
+                source = "sina"
+            else:
+                # 偏差 > 0.5% 时取腾讯（主源优先）
+                deviation = abs(open_price - sina["open"]) / sina["open"] * 100
+                if deviation > 0.5:
+                    print(f"[开盘价交叉] {name}: 腾讯={open_price:.2f} vs 新浪={sina['open']:.2f} Δ{deviation:.2f}%，保留腾讯")
+                    source = "tencent:cross"
+
+        # ③ fallback 到昨收
+        if open_price is None:
+            open_price = tc.get("prev_close") or sina.get("prev_close")
+            if open_price:
+                source = "prev_close"
+                print(f"[开盘价] {name}: 无今日开盘数据，fallback到昨收{open_price:.2f}")
+
+        if open_price:
+            result[ticker] = {"price": round(open_price, 2), "source": source}
+
+    # 打摘要
+    sources = {}
+    for v in result.values():
+        s = v.get("source", "?")
+        sources[s] = sources.get(s, 0) + 1
+    src_line = ", ".join(f"{s}:{c}" for s, c in sources.items())
+    print(f"  开盘价来源: {src_line} | 总计{len(result)}只")
+    return result
 
 # 无内容关键词（板块标签而非实体名称）
 NON_ENTITY_KW = set([
@@ -431,6 +563,18 @@ def main():
             'trend': trend, 'advice': advice, 'pos': pos,
             'trigger': tech_trigger, 'risk': risk_desc, 'catalyst': catalyst_desc,
         })
+
+    # ── 实时开盘价覆盖（v2.4.0）──
+    real_opens = fetch_real_open_prices()
+    for r in records:
+        for ticker, name in TICKERS:
+            if r["name"] == name and ticker in real_opens:
+                old_price = r["price"]
+                r["price"] = f"{real_opens[ticker]['price']:.2f}"
+                r["_open_source"] = real_opens[ticker]["source"]
+                if old_price and old_price != "-" and old_price != r["price"]:
+                    print(f"  [开盘价覆盖] {name}: {old_price}→{r['price']}")
+                break
 
     # ── Schema 校验 ──
     passed, errors = validate_records(records)
