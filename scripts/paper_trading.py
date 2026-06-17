@@ -38,9 +38,24 @@ MAX_TOTAL_RATIO = 0.80      # 总仓位 80%
 
 # 价格获取
 def _fetch_close_price(code: str, date_str: str) -> Optional[float]:
-    """从本地缓存/新浪抓取收盘价"""
+    """从 closing_review 收盘快照/本地缓存/新浪抓取收盘价"""
     import requests
-    # 先查日线缓存
+    # 优先读 closing_review.py 写入的收盘价快照
+    date_tag = date_str.replace("-", "")
+    snapshot_file = f"{PROJECT_DIR}/reports/close_snapshot_{date_tag}.json"
+    if os.path.exists(snapshot_file):
+        with open(snapshot_file) as f:
+            snapshot = json.load(f)
+        # 快照 key 是中文名，需要转换
+        name = _CODE_NAME.get(code, _CODE_NAME.get("sh" + code, _CODE_NAME.get("sz" + code)))
+        if name and name in snapshot:
+            return snapshot[name]
+        # 也尝试无前缀匹配
+        clean = code.replace("sh", "").replace("sz", "")
+        for sname, sprice in snapshot.items():
+            if clean in sname or sname in clean:
+                return sprice
+    # 再查日线缓存
     cache_file = f"{PROJECT_DIR}/data/cache/{code}-daily.csv"
     if os.path.exists(cache_file):
         with open(cache_file) as f:

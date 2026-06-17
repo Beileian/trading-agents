@@ -17,17 +17,17 @@ trap 'exit_code=$?; echo "# ⚠️ 收盘复盘异常\n\n脚本 exit=$exit_code\
 
 echo "=== A股收盘复盘 $DATE_STR ==="
 
-# 步骤1: 更新虚拟盘收盘净值
-echo "[1/3] 虚拟盘收盘更新..."
-/usr/bin/python3 "$SCRIPT_DIR/paper_trading.py" close "$DATE_STR" 2>&1 || echo "[WARN] 虚拟盘收盘更新失败"
-
-# 步骤2: 运行收盘复盘
-echo "[2/3] 运行收盘复盘..."
+# 步骤1: 运行收盘复盘（先跑→获取准确收盘价→生成快照JSON）
+echo "[1/3] 运行收盘复盘..."
 /usr/bin/python3 "$SCRIPT_DIR/closing_review.py" 2>&1 || {
     echo "[WARN] 收盘复盘脚本失败，使用降级推送"
 }
 
-# 步骤2: 推送（含降级）
+# 步骤2: 更新虚拟盘收盘净值（从复盘快照JSON读取收盘价）
+echo "[2/3] 虚拟盘收盘更新..."
+/usr/bin/python3 "$SCRIPT_DIR/paper_trading.py" close "$DATE_STR" 2>&1 || echo "[WARN] 虚拟盘收盘更新失败"
+
+# 步骤3: 推送（含降级）
 REVIEW_FILE="$REPORT_DIR/closing_review_${DATE_TAG}.md"
 PAPER_STATE="$REPORT_DIR/paper_state.json"
 

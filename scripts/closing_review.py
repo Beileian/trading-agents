@@ -951,6 +951,36 @@ def main():
     prices = fetch_close_prices()
     print(f"  收盘价: {len(prices)} 只标的获取成功")
 
+    # 写入收盘价快照 → paper_trading.py 复用
+    close_snapshot = {name: val["price"] for name, val in prices.items()}
+    snapshot_file = os.path.join(PROJECT_DIR, "reports", f"close_snapshot_{TODAY_TAG}.json")
+    with open(snapshot_file, "w") as f:
+        json.dump(close_snapshot, f, ensure_ascii=False)
+
+    # 用收盘快照更新虚拟盘持仓现价（paper_trading close 在 review 之后执行，
+    # 但复盘报告需要展示准确的当日市值）
+    paper_state_file = os.path.join(PROJECT_DIR, "reports", "paper_state.json")
+    if os.path.exists(paper_state_file):
+        with open(paper_state_file) as f:
+            ps = json.load(f)
+        updated = False
+        for p in ps.get("positions", []):
+            name = p.get("name", "")
+            if name in close_snapshot:
+                new_price = close_snapshot[name]
+                p["current_price"] = new_price
+                p["market_value"] = round(p["shares"] * new_price, 2)
+                p["unrealized_pnl"] = round(p["market_value"] - p["shares"] * p["avg_cost"], 2)
+                updated = True
+        if updated:
+            pos_val = sum(p["market_value"] for p in ps["positions"])
+            ps["total_assets"] = ps.get("cash", 0) + pos_val
+            ps["net_value"] = round(ps["total_assets"] / ps.get("initial_assets", ps["total_assets"]), 4) if ps.get("initial_assets") else round(ps["total_assets"] / 100000, 4)
+            with open(paper_state_file, "w") as f:
+                json.dump(ps, f, ensure_ascii=False, indent=2)
+            updated_count = len([p for p in ps["positions"] if p["name"] in close_snapshot])
+            print(f"  虚拟盘快照更新: {updated_count} 只标的")
+
     thresholds = load_thresholds()
     print(f"  阈值加载: {len(thresholds)} 只标的")
 
