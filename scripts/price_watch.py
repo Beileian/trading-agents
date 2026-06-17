@@ -227,16 +227,22 @@ def dedup_alerts(alerts):
 
     return new_alerts
 
+ALERT_FILE = f"{PROJECT_DIR}/logs/latest_price_alerts.txt"
+
 def push_alerts(alerts):
-    """输出预警到 stdout，由 Gateway Cron announce 机制推送到群"""
+    """将预警写入文件，由 Gateway Cron agent 读取后通过 announce 推送"""
     if not alerts:
+        # 无预警时清理旧文件
+        if os.path.exists(ALERT_FILE):
+            os.remove(ALERT_FILE)
         return
 
     lines = ["⚡ 盘中价格预警"]
     for a in alerts:
         lines.append(f"- {a['msg']}")
 
-    print('\n'.join(lines))
+    with open(ALERT_FILE, 'w') as f:
+        f.write('\n'.join(lines))
 
 def main():
     now = datetime.now(TZ)
