@@ -317,7 +317,11 @@ def adjust_trigger(advice, support, resistance, bias_val, direction, calibration
 def load_overseas_signal(date_str: str) -> str | None:
     y = date_str[:4]; m = date_str[4:6]; d = date_str[6:8]
     iso = f"{y}-{m}-{d}"
-    path = os.path.join(OVERSEAS_DIR, "reports", f"overseas_signal_{iso}.md")
+    # 优先读金桥本地（由金桥 extract_signal.py 生成）
+    path = os.path.join(PROJECT_DIR, "reports", f"overseas_signal_{iso}.md")
+    if not os.path.exists(path):
+        # fallback: overseas-morning-brief 旧址
+        path = os.path.join(OVERSEAS_DIR, "reports", f"overseas_signal_{iso}.md")
     if os.path.exists(path):
         with open(path) as f:
             return f.read()
