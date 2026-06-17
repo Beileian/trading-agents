@@ -3,6 +3,7 @@
 收盘复盘 — 比照今日研判 vs 实际走势，逐标的检查触发条件穿越情况。
 认知闭环：方向验证 + 幅度评估 + 触发条件穿越检测 → 推送「谈股论金奔富」群。
 
+v2.6.0: 收盘价数据准确性三重保障 — 新浪时间戳校验 + 腾讯多源交叉 + 数据源溯源摘要
 v1: 基础实现 — 覆盖外盘研判方向验证 + 9标的触发穿越 + 认知模式记录
 """
 
@@ -60,14 +61,44 @@ def _fetch_akshare_close(index_name):
         return None
 
 
+TENCENT_MAP = {
+    "上证50": "sh000016", "沪深300": "sh000300", "科创50": "sh000688",
+    "农业银行": "sh601288", "中国银行": "sh601988", "招商银行": "sh600036",
+    "国电电力": "sh600795", "中国长城": "sz000066", "国睿科技": "sh600562",
+    "中证机器人": "sh562500",
+}
+
+def _fetch_tencent_close_price(name):
+    """从腾讯实时行情获取收盘价，失败返回 None"""
+    code = TENCENT_MAP.get(name)
+    if not code:
+        return None
+    try:
+        resp = requests.get(f"http://qt.gtimg.cn/q={code}", timeout=5)
+        resp.encoding = "gbk"
+        m = re.search(r'="(.+)"', resp.text)
+        if not m:
+            return None
+        fields = m.group(1).split("~")
+        if len(fields) < 35:
+            return None
+        # 腾讯: fields[3]=当前价, fields[30]=日期, fields[31]=时间
+        ts_date = fields[30] if len(fields) > 30 else ""
+        price = float(fields[3]) if fields[3] and fields[3] != "0.000" else None
+        return {"price": price, "date": ts_date}
+    except Exception:
+        return None
+
 def fetch_close_prices():
-    """从新浪获取今日收盘价 & 涨跌幅，指数类用AKShare交叉校验"""
+    """从新浪获取今日收盘价，多源交叉校验"""
     codes = list(SINA_MAP.keys())
     url = "http://hq.sinajs.cn/list=" + ",".join(codes)
     resp = requests.get(url, headers={"Referer": "https://finance.sina.com.cn"}, timeout=10)
     resp.encoding = "gbk"
 
     prices = {}
+    today_str = NOW.strftime("%Y-%m-%d")
+
     for line in resp.text.strip().split("\n"):
         m = re.search(r'hq_str_(\w+)="(.+)"', line)
         if not m:
@@ -77,27 +108,60 @@ def fetch_close_prices():
         if not name:
             continue
         fields = data.split(",")
-        # 新浪接口统一格式：fields[1]=今开, fields[2]=昨收, fields[3]=当前价, fields[4]=最高, fields[5]=最低
-        # v2: 移除前缀误判，统一从 fields[3] 取当前价（指数/个股新浪格式一致）
+
+        # ① 时间戳校验 — 防止新浪返回过期数据
+        sina_date = fields[30] if len(fields) > 30 else ""
+        if sina_date and sina_date != today_str:
+            print(f"[时间戳校验] {name}: 新浪返回{sina_date}≠{today_str}，数据过期，跳过")
+            continue
+
         price = float(fields[3]) if fields[3] and fields[3] != "0.000" else float(fields[1])
         prev = float(fields[2]) if fields[2] else 0
         high = float(fields[4]) if fields[4] else 0
         low = float(fields[5]) if fields[5] else 0
+        data_source = "sina"
 
-        # 指数类：AKShare交叉校验
+        # ② 指数：AKShare交叉校验
         if name in AKSHARE_INDEX_MAP:
             akshare_close = _fetch_akshare_close(name)
             if akshare_close is not None:
                 deviation = abs(price - akshare_close) / akshare_close * 100 if akshare_close else 0
                 if deviation > 0.5:
-                    print(f"[交叉校验] {name}: 新浪={price:.2f} vs AKShare={akshare_close:.2f} 偏差={deviation:.2f}%，采用AKShare数据")
+                    print(f"[交叉校验] {name}: 新浪={price:.2f} vs AKShare={akshare_close:.2f} 偏差={deviation:.2f}%，采用AKShare")
                     price = akshare_close
+                    data_source = "akshare"
+
+        # ③ 个股：腾讯交叉校验
+        if data_source == "sina" and name in TENCENT_MAP:
+            tencent = _fetch_tencent_close_price(name)
+            if tencent and tencent.get("price") and tencent.get("date") == today_str:
+                deviation = abs(price - tencent["price"]) / tencent["price"] * 100 if tencent["price"] else 0
+                if deviation > 0.5:
+                    # 取两者中与昨收更合理的方向
+                    sina_chg = (price - prev) / prev * 100 if prev else 0
+                    tc_prev = float(fields[2]) if fields[2] else 0
+                    tc_chg = (tencent["price"] - tc_prev) / tc_prev * 100 if tc_prev else 0
+                    if abs(tc_chg) < abs(sina_chg * 2):  # 腾讯变化更合理
+                        print(f"[交叉校验] {name}: 新浪={price:.2f} vs 腾讯={tencent['price']:.2f} 偏差={deviation:.2f}%，采用腾讯")
+                        price = tencent["price"]
+                        data_source = "tencent"
 
         chg_pct = (price / prev - 1) * 100 if prev else 0
         prices[name] = {
             "price": round(price, 2), "chg_pct": round(chg_pct, 2),
             "high": round(high, 2), "low": round(low, 2),
+            "source": data_source,
         }
+
+    # ④ 完整性断言摘要
+    if prices:
+        sources = {}
+        for n, v in prices.items():
+            s = v.get("source", "?")
+            sources[s] = sources.get(s, 0) + 1
+        src_summary = ", ".join(f"{s}:{c}" for s, c in sources.items())
+        print(f"  收盘价来源: {src_summary} | 总计{len(prices)}只")
+
     return prices
 
 
@@ -935,6 +999,14 @@ def build_report(prices, thresholds, overseas_dir, overseas_conf):
             L.append("")
     
     # ═══ 脚注 ═══
+    # 数据源校验摘要
+    if prices:
+        source_info = {}
+        for n, v in prices.items():
+            s = v.get("source", "?")
+            source_info[s] = source_info.get(s, 0) + 1
+        src_line = " · ".join(f"{s}({c})" for s, c in source_info.items())
+        L.append(f"> 数据源: {src_line} | 时间戳校验: {TODAY_DATE}")
     L.append(f"> *收盘复盘 · {TODAY_DATE} · AI辅助分析，不构成投资建议*")
     
     return "\n".join(L)
