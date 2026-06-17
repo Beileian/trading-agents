@@ -1,8 +1,12 @@
 #!/usr/bin/env python3
 """
-外盘晨间研判 — 信号提取与修正因子生成
+外盘信号提取 v2.0 — 从 morning_brief 提取结构化信号供开盘推送使用。
+项目: 金桥量化 v2.5.0
 输入: reports/morning_brief_YYYY-MM-DD.md（由AI研判生成）
 输出: reports/overseas_signal_YYYY-MM-DD.md（精简版，注入交易推荐报告）
+
+v2.0: 金桥仓库自包含 + morning_brief 不可用时降级到新浪实时美股指数
+v1: 基础版（依赖 overseas-morning-brief 项目路径）
 """
 
 import os, sys, re
