@@ -11,7 +11,7 @@ DATE_STR=$(date +%Y-%m-%d)
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_DIR="$(dirname "$SCRIPT_DIR")"
 REPORT_DIR="$PROJECT_DIR/reports"
-PUSH_SCRIPT="/root/.openclaw/workspace/projects/overseas-morning-brief/scripts/send_to_dingtalk.py"
+PUSH_SCRIPT="$SCRIPT_DIR/send_to_dingtalk.py"
 PUSH_FILE="$REPORT_DIR/premarket_${DATE_TAG}.md"
 
 # 失败告警：脚本退出码非0时推送到群
@@ -57,9 +57,9 @@ sed -i "s/opinions_20260604\.md/opinions_${DATE_TAG}.md/" trading_analysis_lates
 sed -i "s/2021-06-04 至 2026-06-04/2021-06-04 至 $DATE_STR/" trading_analysis_latest.py
 /usr/bin/python3 trading_analysis_latest.py 2>&1 || echo "[WARN] 技术分析部分失败，继续"
 
-# 步骤2: IMA知识库观点
-echo "[2/5] 提取IMA知识库观点..."
-/usr/bin/python3 "$SCRIPT_DIR/extract_ima_opinions.py" 2>&1 || echo "[WARN] IMA提取失败，继续"
+# 步骤2: IMA知识库观点（一步完成：提取+衰减+摘要）
+echo "[2/5] IMA观点管线..."
+/usr/bin/python3 "$SCRIPT_DIR/ima_pipeline.py" 2>&1 || echo "[WARN] IMA管线失败，继续"
 
 # 步骤3: 交易推荐表格（Schema 校验 + 重试）
 echo "[3/5] 生成交易推荐..."
@@ -98,7 +98,7 @@ echo "[4/5] 虚拟盘执行..."
 
 # 步骤5: 拼装并推送
 echo "[5/5] 拼装推送..."
-SIGNAL_FILE="/root/.openclaw/workspace/projects/overseas-morning-brief/reports/overseas_signal_${DATE_STR}.md"
+SIGNAL_FILE="$PROJECT_DIR/reports/overseas_signal_${DATE_STR}.md"
 TRADE_FILE="$REPORT_DIR/trade_signals_${DATE_TAG}.md"
 OPINION_FILE="$REPORT_DIR/opinions_${DATE_TAG}.md"
 

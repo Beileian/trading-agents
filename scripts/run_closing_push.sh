@@ -10,7 +10,7 @@ DATE_STR=$(date +%Y-%m-%d)
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_DIR="$(dirname "$SCRIPT_DIR")"
 REPORT_DIR="$PROJECT_DIR/reports"
-PUSH_SCRIPT="/root/.openclaw/workspace/projects/overseas-morning-brief/scripts/send_to_dingtalk.py"
+PUSH_SCRIPT="$SCRIPT_DIR/send_to_dingtalk.py"
 
 # 失败告警
 trap 'exit_code=$?; echo "# ⚠️ 收盘复盘异常\n\n脚本 exit=$exit_code\n时间: $(TZ=Asia/Shanghai date +%Y-%m-%d\\ %H:%M:%S)" | python3 "$PUSH_SCRIPT" 2>/dev/null' ERR

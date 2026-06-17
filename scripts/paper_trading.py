@@ -42,59 +42,21 @@ MAX_TOTAL_RATIO = 0.80      # 总仓位 80%
 
 # 价格获取
 def _fetch_close_price(code: str, date_str: str) -> Optional[float]:
-    """从 closing_review 收盘快照/本地缓存/新浪抓取收盘价"""
-    import requests
-    # 优先读 closing_review.py 写入的收盘价快照
+    """从 closing_review 收盘快照获取收盘价（唯一数据源）"""
     date_tag = date_str.replace("-", "")
     snapshot_file = f"{PROJECT_DIR}/reports/close_snapshot_{date_tag}.json"
-    if os.path.exists(snapshot_file):
-        with open(snapshot_file) as f:
-            snapshot = json.load(f)
-        # 快照 key 是中文名，需要转换
-        name = _CODE_NAME.get(code, _CODE_NAME.get("sh" + code, _CODE_NAME.get("sz" + code)))
-        if name and name in snapshot:
-            return snapshot[name]
-        # 也尝试无前缀匹配
-        clean = code.replace("sh", "").replace("sz", "")
-        for sname, sprice in snapshot.items():
-            if clean in sname or sname in clean:
-                return sprice
-    # 再查日线缓存
-    cache_file = f"{PROJECT_DIR}/data/cache/{code}-daily.csv"
-    if os.path.exists(cache_file):
-        with open(cache_file) as f:
-            for line in f:
-                if line.startswith(date_str):
-                    parts = line.strip().split(",")
-                    if len(parts) >= 5:
-                        try:
-                            return float(parts[4])  # close
-                        except ValueError:
-                            pass
-    # 新浪实时行情
-    sina_map = {
-        "sh000016": "sh000016", "sh000300": "sh000300", "sh588000": "sh588000",
-        "sh601288": "sh601288", "sh601988": "sh601988", "sh600036": "sh600036",
-        "sh600795": "sh600795", "sz000066": "sz000066", "sh600562": "sh600562",
-        "sh562500": "sh562500",
-        # 用户持仓代码（不含sh/sz前缀）
-        "000016": "sh000016", "000300": "sh000300", "000688": "sh588000",
-        "601288": "sh601288", "601988": "sh601988", "600036": "sh600036",
-        "600795": "sh600795", "000066": "sz000066", "600562": "sh600562",
-        "562500": "sh562500",
-    }
-    if code in sina_map:
-        try:
-            url = f"http://hq.sinajs.cn/list={code}"
-            r = requests.get(url, headers={"Referer": "https://finance.sina.com.cn"}, timeout=5)
-            r.encoding = "gbk"
-            m = re.search(r'="(.+)"', r.text)
-            if m:
-                fields = m.group(1).split(",")
-                if len(fields) > 3:
-                    return float(fields[3])  # current price
-        except Exception:
-            pass
+    if not os.path.exists(snapshot_file):
+        return None
+    with open(snapshot_file) as f:
+        snapshot = json.load(f)
+    name = _CODE_NAME.get(code, _CODE_NAME.get("sh" + code, _CODE_NAME.get("sz" + code)))
+    if name and name in snapshot:
+        return snapshot[name]
+    # 备选: 模糊匹配
+    clean = code.replace("sh", "").replace("sz", "")
+    for sname, sprice in snapshot.items():
+        if clean in sname or sname in clean:
+            return sprice
     return None
 
 # 名称映射
