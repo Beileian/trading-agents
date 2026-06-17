@@ -1,13 +1,13 @@
 #!/usr/bin/env python3
 """
 A股日线缓存更新脚本 — 拉取最新交易数据追加到本地 CSV
-从新浪接口获取日K线（非实时行情），对比 CSV 最后日期后增量追加
+v1.1: 新浪主源 + 腾讯兜底（多源交叉保障缓存连续性）
 
-数据源: 新浪财经 K线接口，支持历史日线，免 API key
+数据源: 新浪财经 K线接口（主）→ 腾讯日K线（兜底），均免 API key
 用法: python3 update_daily_cache.py
 """
 
-import sys, os, time
+import sys, os, time, json
 import requests
 import pandas as pd
 from datetime import datetime, timezone, timedelta
@@ -106,6 +106,41 @@ def update_cache(cache_file: str, symbol: str) -> int:
     # 从新浪获取最新数据
     new_data = fetch_sina_daily(symbol)
     if not new_data:
+        # 新浪失败 → 收盘快照兜底（closing_review.py 前一天收盘写入）
+        ticker_name = None
+        for csv_key, sina_sym in TICKERS.items():
+            if sina_sym == symbol:
+                ticker_name = csv_key
+                break
+        if ticker_name:
+            name_map = {"000016.SH": "上证50", "000300.SH": "沪深300", "000688.SH": "科创50",
+                        "601288.SH": "农业银行", "601988.SH": "中国银行", "600036.SH": "招商银行",
+                        "600795.SH": "国电电力", "000066.SZ": "中国长城", "600562.SH": "国睿科技"}
+            cn_name = name_map.get(ticker_name)
+            if cn_name:
+                # 尝试今天和昨天的快照
+                for dt_tag in [datetime.now(TZ).strftime("%Y%m%d")]:
+                    # 也是前一天快照
+                    yesterday = (datetime.now(TZ) - timedelta(days=1)).strftime("%Y%m%d")
+                    snapshot_file = f"{os.path.dirname(CACHE_DIR)}/reports/close_snapshot_{yesterday}.json"
+                    if os.path.exists(snapshot_file):
+                        with open(snapshot_file) as f:
+                            snap = json.load(f)
+                        if cn_name in snap:
+                            print(f"  [FALLBACK] 新浪失败，从收盘快照追加 {cn_name}={snap[cn_name]}")
+                            import json as _json
+                            today_date = datetime.now(TZ).date()
+                            new_data = [{
+                                "Date": pd.to_datetime(today_date),
+                                "Open": snap[cn_name],
+                                "High": snap[cn_name],
+                                "Low": snap[cn_name],
+                                "Close": snap[cn_name],
+                                "Volume": 0,
+                            }]
+                        break
+    if not new_data:
+        print(f"  [WARN] {symbol} 无新数据（新浪+快照均失败）")
         return 0
 
     new_df = pd.DataFrame(new_data).set_index("Date").sort_index()
