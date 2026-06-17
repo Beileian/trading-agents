@@ -227,22 +227,55 @@ def dedup_alerts(alerts):
 
     return new_alerts
 
-ALERT_FILE = f"{PROJECT_DIR}/logs/latest_price_alerts.txt"
+# 钉钉机器人推送（与 send_to_dingtalk.py 一致的 API）
+DINGTALK_APP_KEY = "dingmvin6gkm96gookpo"
+DINGTALK_APP_SECRET = "5l6HvoMYkAK3AMPMDYpvnVCP7X-jCKOIweQGY0re5tSZLpQlL4UpNZUE2KxJVqzA"
+DINGTALK_GROUP_CID = "cidY4mlx+J2kNFpTiWFgQ0gkg=="
+
+def _get_dingtalk_token():
+    """获取钉钉机器人 access token"""
+    resp = requests.post("https://api.dingtalk.com/v1.0/oauth2/accessToken", json={
+        "appKey": DINGTALK_APP_KEY,
+        "appSecret": DINGTALK_APP_SECRET
+    }, timeout=10)
+    resp.raise_for_status()
+    return resp.json()["accessToken"]
 
 def push_alerts(alerts):
-    """将预警写入文件，由 Gateway Cron agent 读取后通过 announce 推送"""
+    """通过钉钉机器人 API 直接推送预警到群"""
     if not alerts:
-        # 无预警时清理旧文件
-        if os.path.exists(ALERT_FILE):
-            os.remove(ALERT_FILE)
         return
 
     lines = ["⚡ 盘中价格预警"]
     for a in alerts:
         lines.append(f"- {a['msg']}")
+    text = '\n'.join(lines)
 
-    with open(ALERT_FILE, 'w') as f:
-        f.write('\n'.join(lines))
+    try:
+        token = _get_dingtalk_token()
+        resp = requests.post(
+            "https://api.dingtalk.com/v1.0/robot/groupMessages/send",
+            headers={
+                "x-acs-dingtalk-access-token": token,
+                "Content-Type": "application/json"
+            },
+            json={
+                "robotCode": DINGTALK_APP_KEY,
+                "openConversationId": DINGTALK_GROUP_CID,
+                "msgKey": "sampleMarkdown",
+                "msgParam": json.dumps({
+                    "title": "⚡ 盘中价格预警",
+                    "text": text
+                })
+            },
+            timeout=15
+        )
+        if resp.status_code == 200:
+            print(f"[price_watch] 预警已推送: {len(alerts)} 条")
+        else:
+            print(f"[price_watch] 推送失败: {resp.status_code} {resp.text}")
+    except Exception as e:
+        print(f"[price_watch] 推送异常: {e}")
 
 def main():
     now = datetime.now(TZ)
