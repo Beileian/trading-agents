@@ -1,9 +1,9 @@
 {
   "cash": 22026.75,
   "created_at": "2026-06-15 16:35",
-  "updated_at": "2026-06-17 19:41:52",
-  "net_value": 1.0999,
-  "total_assets": 109994.75,
+  "updated_at": "2026-06-18 15:30:06",
+  "net_value": 1.0897,
+  "total_assets": 108967.75,
   "positions": [
     {
       "code": "000688",
@@ -19,63 +19,63 @@
       "name": "农业银行",
       "shares": 4000,
       "avg_cost": 6.3733,
-      "current_price": 6.53,
-      "market_value": 26120.0,
-      "unrealized_pnl": 626.8
+      "current_price": 6.37,
+      "market_value": 25480.0,
+      "unrealized_pnl": -13.2
     },
     {
       "code": "601988",
       "name": "中国银行",
       "shares": 1200,
       "avg_cost": 5.017,
-      "current_price": 5.94,
-      "market_value": 7128.0,
-      "unrealized_pnl": 1107.6
+      "current_price": 5.78,
+      "market_value": 6936.0,
+      "unrealized_pnl": 915.6
     },
     {
       "code": "600036",
       "name": "招商银行",
       "shares": 400,
       "avg_cost": 37.0704,
-      "current_price": 38.23,
-      "market_value": 15292.0,
-      "unrealized_pnl": 463.84
+      "current_price": 37.26,
+      "market_value": 14904.0,
+      "unrealized_pnl": 75.84
     },
     {
       "code": "600795",
       "name": "国电电力",
       "shares": 300,
       "avg_cost": 5.0067,
-      "current_price": 4.94,
-      "market_value": 1482.0,
-      "unrealized_pnl": -20.01
+      "current_price": 4.74,
+      "market_value": 1422.0,
+      "unrealized_pnl": -80.01
     },
     {
       "code": "000066",
       "name": "中国长城",
       "shares": 600,
       "avg_cost": 19.47,
-      "current_price": 17.81,
-      "market_value": 10686.0,
-      "unrealized_pnl": -996.0
+      "current_price": 17.84,
+      "market_value": 10704.0,
+      "unrealized_pnl": -978.0
     },
     {
       "code": "600562",
       "name": "国睿科技",
       "shares": 400,
       "avg_cost": 23.9877,
-      "current_price": 21.84,
-      "market_value": 8736.0,
-      "unrealized_pnl": -859.08
+      "current_price": 22.24,
+      "market_value": 8896.0,
+      "unrealized_pnl": -699.08
     },
     {
       "code": "562500",
       "name": "中证机器人(机器人ETF华夏)",
       "shares": 2500,
       "avg_cost": 1.1118,
-      "current_price": 1.14,
-      "market_value": 2850.0,
-      "unrealized_pnl": 70.5
+      "current_price": 1.17,
+      "market_value": 2925.0,
+      "unrealized_pnl": 145.5
     }
   ],
   "net_values": [
@@ -102,6 +102,18 @@
     [
       "2026-06-17",
       1.0999
+    ],
+    [
+      "2026-06-18",
+      1.0999
+    ],
+    [
+      "2026-06-18",
+      1.0999
+    ],
+    [
+      "2026-06-18",
+      1.0897
     ]
   ]
 }

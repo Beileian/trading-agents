@@ -461,30 +461,24 @@ def summarize_cognition(prices, thresholds, overseas_dir, overseas_conf):
 def review_signal_quality() -> list[str]:
     """市场温度计 + 昨日对比 + 本周认知写入，返回报告行列表"""
     lines = []
-    lines.append("**⑥ 市场温度计**")
-    lines.append("")
     
     try:
         import sys
         sys.path.insert(0, os.path.join(PROJECT_DIR, 'scripts'))
         from style_rotation_signals import (
-            compute_market_temperature, DATA_CACHE
+            compute_market_temperature, format_brief_for_push, DATA_CACHE
         )
         
         temp = compute_market_temperature()
         if not temp.signals:
+            lines.append("**⑥ 市场温度计**")
+            lines.append("")
             lines.append("信号模块未产出任何指标")
             return lines
         
-        for s in temp.signals:
-            note = ""
-            if s.data_conf <= 2:
-                note = " [低]"
-            elif s.data_conf == 3:
-                note = " [替]"
-            lines.append(f"{s.emoji()} {s.name}: {s.value} {s.conf_tag()}{note}")
-        
-        lines.append("")
+        # 使用新版 format_brief_for_push 生成带决策建议和矛盾检测的温度计
+        brief = format_brief_for_push(temp)
+        lines.extend(brief.split("\n"))
         
         # 与昨日对比
         today_tag = NOW.strftime("%Y%m%d")
@@ -521,6 +515,8 @@ def review_signal_quality() -> list[str]:
             json.dump(existing, f, indent=2, ensure_ascii=False)
         
     except Exception as e:
+        lines.append("**⑥ 市场温度计**")
+        lines.append("")
         lines.append(f"温度计获取失败: {e}")
     
     lines.append("")
