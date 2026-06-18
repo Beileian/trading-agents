@@ -14,6 +14,9 @@ import time
 from datetime import datetime, timedelta
 from collections import OrderedDict
 
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import symbols_config
+
 import requests
 
 # ── Config ──────────────────────────────────────────────
@@ -24,18 +27,7 @@ DEEPSEEK_KEY = "sk-2fe07fda653b47c6997a51ea0fe842a0"
 DEEPSEEK_URL = "https://api.deepseek.com/chat/completions"
 DEEPSEEK_MODEL = "deepseek-chat"
 
-SYMBOLS = [
-    ("000016.SH", "上证50指数", "index"),
-    ("000300.SH", "沪深300指数", "index"),
-    ("000688.SH", "科创50指数", "index"),
-    ("601288.SH", "农业银行", "stock"),
-    ("601988.SH", "中国银行", "stock"),
-    ("600036.SH", "招商银行", "stock"),
-    ("600795.SH", "国电电力", "stock"),
-    ("000066.SZ", "中国长城", "stock"),
-    ("600562.SH", "国睿科技", "stock"),
-    ("562500.SH", "中证机器人", "stock"),
-]
+SYMBOLS = symbols_config.SYMBOLS
 
 TODAY_STR = "2026-06-04"
 

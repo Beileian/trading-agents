@@ -15,18 +15,10 @@ from datetime import datetime, timezone, timedelta
 TZ = timezone(timedelta(hours=8))
 CACHE_DIR = "/root/.openclaw/workspace/projects/trading-agents/data/cache"
 
-TICKERS = {
-    "000016.SH": "sh000016",
-    "000300.SH": "sh000300",
-    "000688.SH": "sh000688",
-    "601288.SH": "sh601288",
-    "601988.SH": "sh601988",
-    "600036.SH": "sh600036",
-    "600795.SH": "sh600795",
-    "000066.SZ": "sz000066",
-    "600562.SH": "sh600562",
-    "562500.SH": "sh562500",
-}
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import symbols_config
+
+TICKERS = symbols_config.TICKER_SINA_MAP
 
 
 def fetch_sina_daily(symbol: str) -> list[dict]:
