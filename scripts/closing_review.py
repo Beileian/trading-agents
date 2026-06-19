@@ -455,7 +455,7 @@ def summarize_cognition(prices, thresholds, overseas_dir, overseas_conf):
         if op == "sell" and chg > 0.5:
             sell_wrong.append(f"{name} +{chg:.1f}%")
     if sell_wrong:
-        lines.append(f"卖出误判：{len(sell_wrong)} 只（{'，'.join(sell_wrong)}）")
+        lines.append(f"卖出建议偏离（收涨）：{len(sell_wrong)} 只（{'，'.join(sell_wrong)}）")
 
     # ── 4. 触发穿越 ──
     breaches = check_breaches(prices, thresholds)
@@ -768,9 +768,9 @@ def update_cognition_state(prices, thresholds, overseas_dir, overseas_conf, regi
     review_lines.append(f"早盘{total}只标的推荐中，{op_counts['sell']}只卖出/{op_counts['hold']}只持有/{op_counts['buy']}只买入。")
     if sell_wrong:
         sw_str = "、".join(sell_wrong)
-        review_lines.append(f"其中{sw_str}建议卖出但实际收涨，卖出判断面临反弹压力。")
+        review_lines.append(f"其中{sw_str}建议卖出但实际收涨，卖出方向出现偏离。")
     else:
-        review_lines.append(f"卖出建议标的全部收跌，卖出信号有效。")
+        review_lines.append(f"卖出建议方向匹配，无偏离。")
 
     # 穿越详情
     if breach_names:
@@ -819,11 +819,11 @@ def update_cognition_state(prices, thresholds, overseas_dir, overseas_conf, regi
     if overseas_actual and overseas_match:
         overseas_str += f" → 实际{overseas_actual} {overseas_match}"
 
-    # Sell wrong
+    # 卖出建议偏离
     sell_str = ""
     if sell_wrong:
         sw = ",".join(sell_wrong)
-        sell_str = f" | 卖出误判 {sw}"
+        sell_str = f" | 卖出建议偏离 {sw}"
 
     # Breach
     breach_str = ""
@@ -982,15 +982,15 @@ def build_one_line_summary(prices, thresholds, overseas_dir, overseas_conf, brea
     if idx_info:
         parts.append(f"三大指数{' / '.join(idx_info)}")
 
-    # 卖出误判/穿越简报
+    # 卖出建议偏离/穿越简报
     events = []
     if sell_wrong:
-        events.append(f"卖出误判{len(sell_wrong)}只（{'、'.join(sell_wrong)}）")
+        events.append(f"卖出建议偏离{len(sell_wrong)}只（{'、'.join(sell_wrong)}）")
     if breaches:
         b_names = '、'.join(list(set(b['name'] for b in breaches)))
         events.append(f"价格穿越{len(breaches)}条（{b_names}）")
     if not events:
-        events.append("无卖出误判，无价格穿越")
+        events.append("无卖出建议偏离，无价格穿越")
     parts.append('；'.join(events))
 
     # 温度计方向 + 外盘验证
@@ -1214,8 +1214,8 @@ def build_report(prices, thresholds, overseas_dir, overseas_conf):
         if not extreme:
             L.append("")
     
-    # ═══ 4. 卖出误判 ═══
-    L.append("**④ 卖出误判**")
+    # ═══ 4. 建议方向偏离 ═══
+    L.append("**④ 建议方向 vs 实际方向**")
     sell_wrong = []
     for name in ALL_NAMES:
         if name not in prices or name not in thresholds:
@@ -1223,9 +1223,9 @@ def build_report(prices, thresholds, overseas_dir, overseas_conf):
         if thresholds[name].get("op") == "sell" and prices[name]["chg_pct"] > 0.5:
             sell_wrong.append(f"{name} +{prices[name]['chg_pct']:.1f}%")
     if sell_wrong:
-        L.append(f"{len(sell_wrong)} 只：{'，'.join(sell_wrong)}")
+        L.append(f"卖出建议偏离（收涨）：{len(sell_wrong)} 只 — {'，'.join(sell_wrong)}")
     else:
-        L.append("无")
+        L.append("卖出建议方向匹配，无偏离")
     L.append("")
     
     # ═══ 5. 价格穿越 ═══
@@ -1267,7 +1267,7 @@ def build_report(prices, thresholds, overseas_dir, overseas_conf):
         b_names = list({b['name'] for b in breaches})
         today_entry += f"，穿越 {'、'.join(b_names)}"
     if sell_wrong_count >= 2:
-        today_entry += f"，卖出集体失效({sell_wrong_count})"
+        today_entry += f"，卖出建议集体偏离({sell_wrong_count})"
     os.makedirs(os.path.dirname(weekly_file), exist_ok=True)
     existing = []
     if os.path.exists(weekly_file):

@@ -263,6 +263,10 @@ def calc_bias_direction(symbol):
 
 
 def adjust_trigger(advice, support, resistance, bias_val, direction, calibration_hint=None):
+    """
+    生成触发条件建议，定位从"指令"改为"锚定+自检"。
+    用户风格：中长周期价值趋势持有者，非短周期动量交易。
+    """
     if advice == '-' or '出' not in advice and '入' not in advice and '持' not in advice:
         return '-'
 
@@ -282,32 +286,36 @@ def adjust_trigger(advice, support, resistance, bias_val, direction, calibration
     base = None
 
     if '持' in advice:
-        if b < -2 and direction == '↓':
-            base = f"回调{int(abs(b))}%接近支撑{support}，反弹可期，可分批买入"
-        elif b > 2 and direction == '↑':
-            base = f"乖离{resistance}扩大+接近阻力，减仓规避"
-        elif b < -2 and direction == '↑':
-            base = f"加速下跌中，等{support}企稳，暂勿抄底"
+        if b > 2 and direction == '↑':
+            base = f"浮盈区间高位，可考虑部分获利"
         elif b > 2 and direction == '↓':
             base = f"乖离收敛中，趋势健康，持有"
+        elif b < -2 and direction == '↓':
+            base = f"估值区间下沿，关注加仓窗口"
+        elif b < -2 and direction == '↑':
+            base = f"超跌反弹中，持有观察，确认趋势后再动"
         else:
-            base = f"突破{resistance}加仓 / 跌破{support}减仓"
+            base = f"区间震荡，持有观察"
 
     elif '出' in advice:
         if b > 2 and direction == '↑':
-            base = f"乖离+阻力双重压力，跌破{support}坚决止损"
+            base = f"乖离+阻力双重压力，检查持仓逻辑是否仍成立"
+        elif b < -2 and direction == '↓':
+            base = f"破位下行，检查基本面是否变化"
         elif direction == '↓':
-            base = f"乖离收敛中，反弹可减亏，{support}~{resistance}分批出"
+            base = f"压力区间下移，关注{support}能否守住"
         else:
-            base = f"跌破{support}止损"
+            base = f"关注{support}支撑有效性"
 
     elif '入' in advice:
         if b < -2 and direction == '↓':
-            base = f"超跌+乖离收敛，{support}附近建仓"
+            base = f"超跌区间，{support}附近可考虑分批建仓"
+        elif b < -2 and direction == '↑':
+            base = f"超跌后反弹确认，回踩{support}可轻仓试探"
         elif b > 2 and direction == '↑':
-            base = f"乖离偏高追高风险，等回调至{support}再入"
+            base = f"乖离偏高，追高风险大，等回调至{support}再关注"
         else:
-            base = f"回踩{support}买入"
+            base = f"回踩{support}附近可考虑"
 
     if base is None:
         return '-'
@@ -682,10 +690,10 @@ def build_synthesis_paragraph(mkt_temp, overseas_text, records):
         lines.append("温度偏热但外盘偏空，短期谨慎，估值偏贵但情绪支撑")
     # Rule 2: 温度偏冷 + 多数个股 TimesFM P10 附近
     elif temp_direction == 'cold' and (timesfm_p10_minus >= timesfm_total * 0.5 if timesfm_total else False):
-        lines.append("估值便宜但趋势未确认，可轻仓试探")
+        lines.append("估值便宜但趋势未确认，关注企稳信号")
     # Rule 3: 温度偏热 + 多数个股 P90 以上
     elif temp_direction == 'warm' and (timesfm_p90_plus >= timesfm_total * 0.5 if timesfm_total else False):
-        lines.append("警惕情绪透支，多数标的处于预测上沿，建议控制仓位")
+        lines.append("警惕情绪透支，多数标的处于预测上沿，注意仓位风险")
     # Rule 4: 波动率切换告警
     elif regime_alerts:
         for a in regime_alerts[:1]:
@@ -721,7 +729,7 @@ def build_synthesis_paragraph(mkt_temp, overseas_text, records):
             elif bearish_count > bullish_count:
                 lines.append(f"多维度偏空（{'、'.join(signals)}），防御为主，等待企稳信号")
             else:
-                lines.append(f"信号分歧（{'、'.join(signals)}），建议观望不追")
+                lines.append(f"信号分歧（{'、'.join(signals)}），方向不明宜观望")
         elif temp_direction:
             lines.append(f"市场温度{temp_direction}，无强外部信号，延续现有策略")
 
