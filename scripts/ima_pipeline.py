@@ -10,15 +10,23 @@ IMA 观点管线 v2.0 — 从知识库提取金融文章 + 时间衰减 + DeepSe
 输出: reports/opinions_{YYYYMMDD}.md
 """
 
-import os, re, json, sys
+import os, re, json, sys, subprocess
 from datetime import datetime, timezone, timedelta
 from collections import defaultdict
 
 TZ = timezone(timedelta(hours=8))
 PROJECT_DIR = "/root/.openclaw/workspace/projects/trading-agents"
-IMA_DIR = os.path.expanduser("~/.ima/knowledge_base/公众号文章")
-if not os.path.exists(IMA_DIR):
-    IMA_DIR = os.path.expanduser("~/.ima/知识库/公众号文章")  # fallback
+
+# IMA API 配置
+IMA_API_CJS = "/root/.openclaw/workspace/skills/ima-skills/ima_api.cjs"
+KB_ID = "p2U2Du3TS2OyfEHx0JpUGTKQsZnE-eLmiUVedwnywEI="
+
+# 知名文件夹（用于来源映射）
+FOLDER_MAP = {
+    'folder_7464136493508841': 'EarlETF',
+    'folder_7464142336175585': '暮云思辨',
+    'folder_7468274916795772': '二小姐笔记',
+}
 
 DEEPSEEK_KEY = os.environ.get("DEEPSEEK_API_KEY", "")
 DEEPSEEK_URL = "https://api.deepseek.com/chat/completions"
@@ -64,54 +72,125 @@ def _date_weight(note_date):
         return 0.30
 
 
-def extract_articles():
-    """从IMA知识库读取金融相关文章，返回带衰减权重的文章列表"""
-    if not os.path.exists(IMA_DIR):
-        return []
+def _call_ima_api(api_path, body):
+    """调用 IMA API，失败时返回 None"""
+    try:
+        result = subprocess.run(
+            ["node", IMA_API_CJS, api_path, json.dumps(body)],
+            capture_output=True, text=True, timeout=30,
+            cwd=os.path.dirname(IMA_API_CJS),
+        )
+        if result.returncode != 0:
+            print(f"[ima_api error] {result.stderr.strip()}", file=sys.stderr)
+            return None
+        return json.loads(result.stdout)
+    except Exception as e:
+        print(f"[ima_api exception] {e}", file=sys.stderr)
+        return None
 
+
+def _ima_search_batch(queries, kb_id=KB_ID, per_query=15):
+    """批量搜索 IMA 知识库，去重后返回文章列表"""
+    seen_ids = set()
     articles = []
-    for root, dirs, files in os.walk(IMA_DIR):
-        for fn in files:
-            if not fn.endswith('.md'):
+    for q in queries:
+        data = _call_ima_api("openapi/note/v1/search_note", {
+            "search_type": 1,
+            "query_info": {"content": q},
+            "start": 0,
+            "end": per_query,
+            "knowledge_base_id": kb_id,
+        })
+        if not data:
+            continue
+        for info in data.get("data", {}).get("search_note_infos", []):
+            nb = info.get("note_book_info", info)
+            nid = nb.get("note_id", "")
+            if nid in seen_ids:
                 continue
-            fpath = os.path.join(root, fn)
+            seen_ids.add(nid)
+            ts = nb.get("create_time", "0")
             try:
-                mtime = os.path.getmtime(fpath)
-                note_date = datetime.fromtimestamp(mtime).strftime("%Y-%m-%d")
+                note_date = datetime.fromtimestamp(int(ts) / 1000).strftime("%Y-%m-%d")
             except:
                 note_date = datetime.now(TZ).strftime("%Y-%m-%d")
-
-            with open(fpath) as f:
-                content = f.read(3000)  # 只读前3KB做标题/关键词匹配
-
-            # 金融关键词匹配
-            keywords = ['股票', 'A股', '上证', '创业板', '科创', 'ETF', '量化',
-                       '银行', '保险', '券商', '基金', '指数', '牛市', '熊市',
-                       '价值投资', '技术分析', '宏观', '美联储', '央行', '利率',
-                       'CPI', 'GDP', '人民币', '汇率', '黄金', '原油', '港股',
-                       '美股', '中概', '外资', '北向', '融资', '杠杆',
-                       '红利', '股息', 'ROE', 'PE', 'PB', '估值']
-            hit_count = sum(1 for kw in keywords if kw in content)
-            if hit_count < 2:
-                continue
-
-            # 提取标题（第一行或YAML frontmatter）
-            title = fn.replace('.md', '')
-            lines = content.split('\n')
-            for line in lines:
-                line = line.strip()
-                if line.startswith('# '):
-                    title = line[2:].strip()
-                    break
-
-            section = os.path.basename(root)
-            weight = _date_weight(note_date)
             articles.append({
-                'title': title,
-                'section': section,
-                'date': note_date,
-                'weight': weight,
+                "note_id": nid,
+                "title": nb.get("title", "无标题"),
+                "summary": nb.get("summary", ""),
+                "date": note_date,
             })
+    return articles
+
+
+def _detect_section(title, summary):
+    """根据标题和摘要检测文章来源"""
+    full = title + summary[:300]
+    if any(kw in full for kw in ['二小姐', '二姐']):
+        return '二小姐笔记'
+    if '与慕同行' in full:
+        return '暮云思辨'
+    if any(kw in title for kw in ['一辈子的交易', '一代人', '从教育到交易', '上桌吃菜', '不可能三角']):
+        return '暮云思辨'
+    if any(kw in full for kw in ['EarlETF', '张翼轸']):
+        return 'EarlETF'
+    # Heuristic: 数据复盘 is EarlETF signature
+    if '数据复盘' in title:
+        return 'EarlETF'
+    return None  # 无法识别的来源
+
+
+def extract_articles():
+    """从IMA知识库（云端API）读取金融相关文章，返回带衰减权重的文章列表"""
+    # 多轮搜索关键词覆盖三个来源
+    search_queries = [
+        # EarlETF 主题
+        "数据复盘", "EarlETF", "红利", "微盘", "估值",
+        "动量", "指数 图表", "价值投资",
+        # 暮云思辨 主题
+        "与慕同行", "一辈子的交易", "不可能三角",
+        "从教育到交易", "一代人",
+        # 二小姐笔记 主题
+        "二小姐", "ETF发车", "定投", "发车",
+        # 金融通用
+        "A股 ETF", "牛市 熊市", "量化 超额", "科创板",
+        "基金 投资", "央行 利率", "中证 沪深",
+    ]
+
+    raw_articles = _ima_search_batch(search_queries)
+    if not raw_articles:
+        print("[ima_pipeline] API 搜索无结果", file=sys.stderr)
+        return []
+
+    print(f"[ima_pipeline] API 搜索到 {len(raw_articles)} 篇候选文章")
+
+    # 金融关键词匹配（在 summary 中统计命中）
+    keywords = ['股票', 'A股', '上证', '创业板', '科创', 'ETF', '量化',
+               '银行', '保险', '券商', '基金', '指数', '牛市', '熊市',
+               '价值投资', '技术分析', '宏观', '美联储', '央行', '利率',
+               'CPI', 'GDP', '人民币', '汇率', '黄金', '原油', '港股',
+               '美股', '中概', '外资', '北向', '融资', '杠杆',
+               '红利', '股息', 'ROE', 'PE', 'PB', '估值', '投资', '行情']
+
+    articles = []
+    for a in raw_articles:
+        # 在标题+摘要中做关键词匹配（摘要已含文章开头内容）
+        text = a['title'] + a['summary'][:3000]
+        hit_count = sum(1 for kw in keywords if kw in text)
+        if hit_count < 2:
+            continue
+
+        section = _detect_section(a['title'], a['summary'])
+        if section is None:
+            continue  # 无法识别的来源跳过
+
+        weight = _date_weight(a['date'])
+        articles.append({
+            'title': a['title'],
+            'section': section,
+            'date': a['date'],
+            'weight': weight,
+        })
 
     # 按权重排序，取前N
     articles.sort(key=lambda x: -x['weight'])
