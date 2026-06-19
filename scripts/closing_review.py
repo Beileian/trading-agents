@@ -966,14 +966,172 @@ def _append_eval_dataset(state, prices, thresholds, overseas_dir, overseas_conf,
 
 
 
+def build_one_line_summary(prices, thresholds, overseas_dir, overseas_conf, breaches, sell_wrong, regime_alerts):
+    """
+    收盘复盘「今日一句话」：聚合指数表现、卖出误判、价格穿越、温度计+外盘验证。
+    格式：{指数摘要}。{卖出误判/穿越简报}。{温度计方向+外盘验证}。{明日关注点}。
+    """
+    import os as _os, json as _json
+    parts = []
+
+    # 指数摘要
+    idx_info = []
+    for n in ['上证50', '沪深300', '科创50']:
+        if n in prices:
+            idx_info.append(f"{n}{prices[n]['chg_pct']:+.2f}%")
+    if idx_info:
+        parts.append(f"三大指数{' / '.join(idx_info)}")
+
+    # 卖出误判/穿越简报
+    events = []
+    if sell_wrong:
+        events.append(f"卖出误判{len(sell_wrong)}只（{'、'.join(sell_wrong)}）")
+    if breaches:
+        b_names = '、'.join(list(set(b['name'] for b in breaches)))
+        events.append(f"价格穿越{len(breaches)}条（{b_names}）")
+    if not events:
+        events.append("无卖出误判，无价格穿越")
+    parts.append('；'.join(events))
+
+    # 温度计方向 + 外盘验证
+    temp_verdict = ""
+    today_tag = NOW.strftime('%Y%m%d')
+    daily_file = _os.path.join(PROJECT_DIR, 'logs', 'cognition_daily', f'{today_tag}.json')
+    if _os.path.exists(daily_file):
+        try:
+            with open(daily_file) as f:
+                daily = _json.load(f)
+            mt = daily.get('market_temperature', {})
+            hot = mt.get('hot', 0)
+            cold = mt.get('cold', 0)
+            if hot > cold:
+                temp_verdict = "温度偏热"
+            elif cold > hot:
+                temp_verdict = "温度偏冷"
+            else:
+                temp_verdict = "温度中性"
+        except Exception:
+            pass
+
+    if overseas_dir:
+        bearish = '偏空' in overseas_dir or '看跌' in overseas_dir
+        bullish = '偏多' in overseas_dir or '看涨' in overseas_dir
+        idx_pcts = [prices[n]['chg_pct'] for n in ['上证50', '沪深300', '科创50'] if n in prices]
+        avg_idx = sum(idx_pcts) / len(idx_pcts) if idx_pcts else 0
+        if avg_idx < -0.5:
+            actual_dir = '偏空'
+        elif avg_idx > 0.5:
+            actual_dir = '偏多'
+        else:
+            actual_dir = '震荡'
+        overseas_match = '吻合' if (
+            (bearish and actual_dir == '偏空') or (bullish and actual_dir == '偏多')
+        ) else '偏离'
+        overseas_part = f"外盘预判{overseas_dir}实际{actual_dir}（{overseas_match}）"
+        if temp_verdict:
+            temp_verdict += f"，{overseas_part}"
+        else:
+            temp_verdict = overseas_part
+
+    if temp_verdict:
+        parts.append(temp_verdict)
+
+    # 明日关注点
+    tomorrow = ""
+    # 连续2天击穿支撑/阻力
+    breach_names_today = set(b['name'] for b in breaches) if breaches else set()
+    yesterday_tag = (NOW - timedelta(days=1)).strftime('%Y%m%d')
+    yesterday_file = _os.path.join(PROJECT_DIR, 'logs', 'cognition_daily', f'{yesterday_tag}.json')
+    yesterday_breaches = set()
+    if _os.path.exists(yesterday_file):
+        try:
+            with open(yesterday_file) as f:
+                yd = _json.load(f)
+            for bn in yd.get('last_review', {}).get('breach_names', []):
+                yesterday_breaches.add(bn)
+        except Exception:
+            pass
+    consecutive = breach_names_today & yesterday_breaches
+    if consecutive:
+        tomorrow = f"关注{'、'.join(sorted(consecutive))}是否确认趋势"
+
+    # 极端波动 >5%
+    if not tomorrow:
+        extreme_5 = [f"{n}{prices[n]['chg_pct']:+.2f}%" for n, p in prices.items() if abs(p['chg_pct']) >= 5]
+        if extreme_5:
+            tomorrow = f"关注{extreme_5[0]}连续异动风险"
+
+    # 温度计方向从偏热转中性
+    if not tomorrow:
+        y_mt = {}
+        if _os.path.exists(yesterday_file):
+            try:
+                with open(yesterday_file) as f:
+                    yd = _json.load(f)
+                y_mt = yd.get('market_temperature', {})
+            except Exception:
+                pass
+        y_hot = y_mt.get('hot', 0)
+        y_cold = y_mt.get('cold', 0)
+        today_tag = NOW.strftime('%Y%m%d')
+        t_file = _os.path.join(PROJECT_DIR, 'logs', 'cognition_daily', f'{today_tag}.json')
+        t_hot = t_cold = 0
+        if _os.path.exists(t_file):
+            try:
+                with open(t_file) as f:
+                    td = _json.load(f)
+                tmt = td.get('market_temperature', {})
+                t_hot = tmt.get('hot', 0)
+                t_cold = tmt.get('cold', 0)
+            except Exception:
+                pass
+        if y_hot > y_cold and not (t_hot > t_cold):
+            tomorrow = "关注市场是否进入冷却期"
+
+    if tomorrow:
+        parts.append(tomorrow)
+    else:
+        parts.append("明日延续现有策略")
+
+    return '。'.join(parts) + '。'
+
+
 def build_report(prices, thresholds, overseas_dir, overseas_conf):
     """组装完整收盘复盘报告 — 8段式结构"""
+    import os as _os, json as _json
     L = []  # 行列表
-    
+
     # ═══ 标题 ═══
     L.append(f"# A股收盘复盘 · {TODAY_DATE}")
     L.append("")
-    
+
+    # ═══ 全局合成：今日一句话 ═══
+    # 先跑一次穿越检测供合成使用
+    _breaches_pre = check_breaches(prices, thresholds)
+    _sell_wrong_pre = []
+    for name in ALL_NAMES:
+        if name not in prices or name not in thresholds:
+            continue
+        if thresholds[name].get("op") == "sell" and prices[name]["chg_pct"] > 0.5:
+            _sell_wrong_pre.append(f"{name} +{prices[name]['chg_pct']:.1f}%")
+    # 波动率体制切换（轻量版，仅取cognition_state已有告警）
+    _regime_alerts_pre = []
+    state_file = _os.path.join(PROJECT_DIR, 'logs', 'cognition_state.json')
+    if _os.path.exists(state_file):
+        try:
+            with open(state_file) as f:
+                st = _json.load(f)
+            ra = st.get('last_review', {}).get('regime_shift_alert')
+            if ra:
+                _regime_alerts_pre.append(ra)
+        except Exception:
+            pass
+    one_liner = build_one_line_summary(prices, thresholds, overseas_dir, overseas_conf,
+                                        _breaches_pre, _sell_wrong_pre, _regime_alerts_pre)
+    if one_liner:
+        L.append(f"【今日一句话】{one_liner}")
+        L.append("")
+
     # ═══ 1. 今日指数 ═══
     L.append("**① 今日指数**")
     index_names = ["上证50", "沪深300", "科创50"]

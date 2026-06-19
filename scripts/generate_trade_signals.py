@@ -604,6 +604,133 @@ def validate_records(records: list) -> tuple[bool, list[str]]:
     return len(errors) == 0, errors
 
 
+def build_synthesis_paragraph(mkt_temp, overseas_text, records):
+    """
+    全局合成判断：聚合温度计、外盘、TimesFM分位、个股乖离率、波动率体制切换。
+    返回 1-3 句话（≤150字）的合成判断字符串，或空字符串表示无法合成。
+    """
+    import glob
+    lines = []
+
+    # 1. 温度计方向
+    temp_direction = None  # 'warm', 'cold', 'neutral'
+    if mkt_temp and mkt_temp.summary:
+        s = mkt_temp.summary
+        if '偏热' in s:
+            temp_direction = 'warm'
+        elif '偏冷' in s:
+            temp_direction = 'cold'
+        elif '中性' in s:
+            temp_direction = 'neutral'
+
+    # 2. 外盘方向
+    overseas_direction = extract_overseas_direction_value(overseas_text)
+
+    # 3. TimesFM 分位：各标的最近一期 P50 相对 latest_close
+    cal_dir = os.path.join(PROJECT_DIR, 'logs', 'timesfm_calibration')
+    cal_files = glob.glob(os.path.join(cal_dir, '*.json'))
+    timesfm_bullish = 0
+    timesfm_bearish = 0
+    timesfm_p90_plus = 0
+    timesfm_p10_minus = 0
+    timesfm_total = 0
+    for cf in cal_files:
+        try:
+            with open(cf) as f:
+                d = json.load(f)
+        except (json.JSONDecodeError, OSError):
+            continue
+        windows = d.get('windows_detail', [])
+        if not windows:
+            continue
+        last_win = windows[-1]
+        last_close = last_win.get('last_close')
+        p50 = last_win.get('fc_5d')
+        p90 = last_win.get('p90_5d')
+        p10 = last_win.get('p10_5d')
+        if last_close and p50:
+            timesfm_total += 1
+            if p50 > last_close:
+                timesfm_bullish += 1
+            elif p50 < last_close:
+                timesfm_bearish += 1
+            if p90 and p50 >= p90:
+                timesfm_p90_plus += 1
+            if p10 and p50 <= p10:
+                timesfm_p10_minus += 1
+
+    # 4. 个股乖离率方向
+    bias_bull = sum(1 for r in records if r.get('bias', '') and '↑' in str(r.get('bias', '')))
+    bias_bear = sum(1 for r in records if r.get('bias', '') and '↓' in str(r.get('bias', '')))
+
+    # 5. 波动率体制切换告警
+    regime_alerts = []
+    state_file = f"{PROJECT_DIR}/logs/cognition_state.json"
+    if os.path.exists(state_file):
+        try:
+            with open(state_file) as f:
+                state = json.load(f)
+            ra = state.get('last_review', {}).get('regime_shift_alert')
+            if ra:
+                regime_alerts.append(ra)
+        except (json.JSONDecodeError, KeyError):
+            pass
+
+    # ── 合成规则 ──
+    # Rule 1: 温度偏热 + 外盘偏空
+    if temp_direction == 'warm' and overseas_direction == -1:
+        lines.append("温度偏热但外盘偏空，短期谨慎，估值偏贵但情绪支撑")
+    # Rule 2: 温度偏冷 + 多数个股 TimesFM P10 附近
+    elif temp_direction == 'cold' and (timesfm_p10_minus >= timesfm_total * 0.5 if timesfm_total else False):
+        lines.append("估值便宜但趋势未确认，可轻仓试探")
+    # Rule 3: 温度偏热 + 多数个股 P90 以上
+    elif temp_direction == 'warm' and (timesfm_p90_plus >= timesfm_total * 0.5 if timesfm_total else False):
+        lines.append("警惕情绪透支，多数标的处于预测上沿，建议控制仓位")
+    # Rule 4: 波动率切换告警
+    elif regime_alerts:
+        for a in regime_alerts[:1]:
+            sym = a.get('symbol', '某标的')
+            lines.append(f"{sym}波动结构变化，历史回测参考价值降低")
+
+    # 默认：方向一致性
+    if not lines:
+        signals = []
+        if temp_direction == 'warm':
+            signals.append('温度偏热')
+        elif temp_direction == 'cold':
+            signals.append('温度偏冷')
+        if overseas_direction == 1:
+            signals.append('外盘偏多')
+        elif overseas_direction == -1:
+            signals.append('外盘偏空')
+        if timesfm_total:
+            if timesfm_bullish > timesfm_bearish:
+                signals.append('TimesFM多数偏多')
+            elif timesfm_bearish > timesfm_bullish:
+                signals.append('TimesFM多数偏空')
+        if bias_bull > bias_bear:
+            signals.append('乖离率多数偏强')
+        elif bias_bear > bias_bull:
+            signals.append('乖离率多数偏弱')
+
+        if signals:
+            bullish_count = sum(1 for s in signals if any(w in s for w in ['偏热', '偏多', '偏强']))
+            bearish_count = sum(1 for s in signals if any(w in s for w in ['偏冷', '偏空', '偏弱']))
+            if bullish_count > bearish_count:
+                lines.append(f"多维度偏多（{'、'.join(signals)}），趋势延续但注意追高风险")
+            elif bearish_count > bullish_count:
+                lines.append(f"多维度偏空（{'、'.join(signals)}），防御为主，等待企稳信号")
+            else:
+                lines.append(f"信号分歧（{'、'.join(signals)}），建议观望不追")
+        elif temp_direction:
+            lines.append(f"市场温度{temp_direction}，无强外部信号，延续现有策略")
+
+    if not lines:
+        return ""
+
+    return '\n'.join(lines)
+
+
 def main():
     date_str = sys.argv[1] if len(sys.argv) > 1 else datetime.now(TZ).strftime('%Y%m%d')
     analysis_file = f"{PROJECT_DIR}/reports/trading_analysis_{date_str}.md"
@@ -687,18 +814,29 @@ def main():
     lines.append("交易推荐 · 开盘前推送")
     lines.append("")
 
-    # ── 市场温度与风格水位 (Phase 1) ──
+    # ── 全局合成判断（聚合全部信号前）──
+    # 先获取温度计（供合成使用）
+    mkt_temp = None
     try:
         from style_rotation_signals import compute_market_temperature, format_compact_for_push
         mkt_temp = compute_market_temperature()
-        if mkt_temp and mkt_temp.summary:
-            lines.append(mkt_temp.summary)
-            compact = format_compact_for_push(mkt_temp)
-            if compact:
-                lines.append(compact)
-            lines.append("")
     except Exception as e:
         print(f"[signals] style_rotation unavailable: {e}", file=sys.stderr)
+
+    synthesis = build_synthesis_paragraph(mkt_temp, overseas_text, records)
+    if synthesis:
+        lines.append(f"【合成判断】{synthesis}")
+        lines.append("")
+
+    # ── 市场温度与风格水位 (Phase 1) ──
+    if mkt_temp and mkt_temp.summary:
+        lines.append(mkt_temp.summary)
+        compact = format_compact_for_push(mkt_temp)
+        if compact:
+            lines.append(compact)
+        lines.append("")
+    elif not mkt_temp:
+        pass  # 已在 try/except 打印错误
 
     # ── 复盘摘要 200-300字 ──
     if last_review and last_review.get("review_summary"):
