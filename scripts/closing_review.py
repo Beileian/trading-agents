@@ -71,6 +71,14 @@ TENCENT_MAP = {
     "中证机器人": "sh562500",
 }
 
+TICKER_CACHE = {
+    '000016.SH': '000016.SH-daily.csv', '000300.SH': '000300.SH-daily.csv',
+    '000688.SH': '000688.SH-daily.csv', '601288.SH': '601288.SS-daily.csv',
+    '601988.SH': '601988.SS-daily.csv', '600036.SH': '600036.SS-daily.csv',
+    '600795.SH': '600795.SH-daily.csv', '000066.SZ': '000066.SZ-daily.csv',
+    '600562.SH': '600562.SH-daily.csv', '562500.SH': '562500.SH-daily.csv',
+}
+
 def _fetch_tencent_close_price(name):
     """从腾讯实时行情获取收盘价，失败返回 None"""
     code = TENCENT_MAP.get(name)
@@ -91,6 +99,79 @@ def _fetch_tencent_close_price(name):
         return {"price": price, "date": ts_date}
     except Exception:
         return None
+
+def detect_volatility_regime_shift(symbol: str, close_prices: list[float]) -> dict | None:
+    """
+    检测波动率体制切换。
+    - 计算过去60天滚动波动率（日收益率标准差年化）
+    - 计算250天基线波动率
+    - 若60d波动率偏离250d基线超过2个标准差(Z>2)，输出体制切换告警
+    返回 None 表示无显著切换，否则返回 dict。
+    """
+    import numpy as np
+    if len(close_prices) < 60:
+        return None
+
+    # 日收益率
+    prices_s = pd.Series(close_prices).dropna()
+    if len(prices_s) < 60:
+        return None
+    rets = prices_s.pct_change().dropna()
+
+    # 年化系数
+    ann_factor = np.sqrt(252)
+
+    # 60天滚动波动率（取最近60天）
+    vol_60d = float(rets.iloc[-60:].std() * ann_factor * 100)
+
+    # 250天基线波动率
+    if len(rets) < 250:
+        vol_250 = float(rets.std() * ann_factor * 100)
+        if len(rets) >= 120:
+            # 用更长窗口估计
+            rolling_vols = [float(rets.iloc[max(0, i-60):i].std() * ann_factor * 100)
+                          for i in range(60, len(rets))]
+            if rolling_vols:
+                vol_250 = float(np.mean(rolling_vols))
+    else:
+        vol_250 = float(rets.iloc[-250:].std() * ann_factor * 100)
+
+    if vol_250 <= 0:
+        return None
+
+    # 计算60d滚动波动率的Z-score（相对250d基线的分布）
+    if len(rets) >= 120:
+        rolling_vols = [float(rets.iloc[max(0, i-60):i].std() * ann_factor * 100)
+                      for i in range(60, len(rets))]
+        if len(rolling_vols) >= 3:
+            vol_mean = float(np.mean(rolling_vols))
+            vol_std = float(np.std(rolling_vols, ddof=1))
+            if vol_std > 0:
+                z_score = (vol_60d - vol_mean) / vol_std
+                if z_score > 2:
+                    return {
+                        'symbol': symbol,
+                        'date': NOW.strftime('%Y-%m-%d'),
+                        'vol_60d': round(vol_60d, 1),
+                        'vol_250d': round(vol_250, 1),
+                        'z_score': round(z_score, 2),
+                        'alert': 'elevated'
+                    }
+                return None
+
+    # 简单偏离判断（无足够历史滚动序列时）
+    ratio = vol_60d / vol_250
+    if ratio > 1.5:
+        return {
+            'symbol': symbol,
+            'date': NOW.strftime('%Y-%m-%d'),
+            'vol_60d': round(vol_60d, 1),
+            'vol_250d': round(vol_250, 1),
+            'z_score': None,
+            'alert': 'elevated'
+        }
+    return None
+
 
 def fetch_close_prices():
     """从新浪获取今日收盘价，多源交叉校验"""
@@ -523,7 +604,7 @@ def review_signal_quality() -> list[str]:
     return lines
 
 
-def update_cognition_state(prices, thresholds, overseas_dir, overseas_conf):
+def update_cognition_state(prices, thresholds, overseas_dir, overseas_conf, regime_alerts=None):
     """Writes structured review metrics to cognition_state.json for next-day feedback."""
     state_file = f"{PROJECT_DIR}/logs/cognition_state.json"
     state = {}
@@ -653,6 +734,7 @@ def update_cognition_state(prices, thresholds, overseas_dir, overseas_conf):
         "extreme_stocks": extreme_stocks,
         "cognitive_tag": tag,
         "calibration_hint": hint,
+        "regime_shift_alert": regime_alerts[0] if regime_alerts else None,
     }
 
     # ── 生成200-300字复盘摘要供次日推送 ──
@@ -933,12 +1015,46 @@ def build_report(prices, thresholds, overseas_dir, overseas_conf):
         L.append(f"预判 {overseas_dir}（{overseas_conf or '?'}）→ 实际 {actual_dir}，{dir_match}（三大指数均 {avg_idx_chg:+.2f}%）")
         L.append("")
     
-    # ═══ 3. 极端波动 ═══
+    # ═══ 3. 极端波动 & 波动率体制切换 ═══
     extreme = [f"{name} {p['chg_pct']:+.2f}%" for name, p in prices.items() if abs(p["chg_pct"]) >= 3]
     if extreme:
         L.append("**③ 极端波动**（|涨跌|≥3%）")
         L.append("，".join(extreme))
         L.append("")
+
+    # 波动率体制切换检测
+    regime_alerts = []
+    for ticker, name in [
+        ("000016.SH", "上证50"), ("000300.SH", "沪深300"), ("000688.SH", "科创50"),
+        ("601288.SH", "农业银行"), ("601988.SH", "中国银行"), ("600036.SH", "招商银行"),
+        ("600795.SH", "国电电力"), ("000066.SZ", "中国长城"), ("600562.SH", "国睿科技"),
+        ("562500.SH", "中证机器人"),
+    ]:
+        cache_path = os.path.join(PROJECT_DIR, "data", "cache", TICKER_CACHE.get(ticker, ""))
+        if not os.path.exists(cache_path):
+            continue
+        try:
+            df = pd.read_csv(cache_path, parse_dates=['Date'])
+            df = df.set_index('Date').sort_index()
+            close_series = df['Close'].values.tolist()
+            alert = detect_volatility_regime_shift(name, close_series)
+            if alert:
+                regime_alerts.append(alert)
+        except Exception:
+            pass
+
+    if regime_alerts:
+        if not extreme:
+            L.append("**③ 极端波动**")
+        alert_lines = []
+        for a in regime_alerts:
+            alert_lines.append(
+                f"⚠️ 波动率体制切换：{a['symbol']} 近60日波动率 {a['vol_60d']:.1f}% "
+                f"显著高于历史基线 {a['vol_250d']:.1f}%，历史回测置信度需打折"
+            )
+        L.extend(alert_lines)
+        if not extreme:
+            L.append("")
     
     # ═══ 4. 卖出误判 ═══
     L.append("**④ 卖出误判**")
@@ -1053,7 +1169,7 @@ def build_report(prices, thresholds, overseas_dir, overseas_conf):
         L.append(f"> 数据源: {src_line} | 时间戳校验: {TODAY_DATE}")
     L.append(f"> *收盘复盘 · {TODAY_DATE} · AI辅助分析，不构成投资建议*")
     
-    return "\n".join(L)
+    return "\n".join(L), regime_alerts
 
 
 def main():
@@ -1104,7 +1220,7 @@ def main():
     overseas_conf = load_overseas_confidence()
     print(f"  外盘研判方向: {overseas_dir}")
 
-    report = build_report(prices, thresholds, overseas_dir, overseas_conf)
+    report, regime_alerts = build_report(prices, thresholds, overseas_dir, overseas_conf)
 
     # 写复盘报告到文件
     review_file = f"{PROJECT_DIR}/reports/closing_review_{TODAY_TAG}.md"
@@ -1117,7 +1233,7 @@ def main():
     print(report)
 
     # 写入结构化复盘状态 → 供次日开盘前推荐算法喂回
-    hint = update_cognition_state(prices, thresholds, overseas_dir, overseas_conf)
+    hint = update_cognition_state(prices, thresholds, overseas_dir, overseas_conf, regime_alerts)
     if hint:
         print(f"  认知校准标签: {hint}")
 

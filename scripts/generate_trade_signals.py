@@ -328,6 +328,95 @@ def load_overseas_signal(date_str: str) -> str | None:
     return None
 
 
+def extract_overseas_direction_value(overseas_text: str | None) -> int:
+    """
+    从外盘信号文本提取方向关键词映射为数值信号：+1=偏多, -1=偏空, 0=中性。
+    """
+    if not overseas_text:
+        return 0
+    text_lower = overseas_text.lower()
+    # 偏多关键词
+    bullish_kw = ['偏多', '看多', '强势', '反弹', '上涨', '逆势', '修复', '走强']
+    # 偏空关键词
+    bearish_kw = ['偏空', '看空', '弱势', '下跌', '回调', '承压', '暴跌', '跳空']
+    bullish_score = sum(1 for kw in bullish_kw if kw in text_lower)
+    bearish_score = sum(1 for kw in bearish_kw if kw in text_lower)
+    if bullish_score > bearish_score:
+        return 1
+    elif bearish_score > bullish_score:
+        return -1
+    # 中性：检查研判方向行
+    m = re.search(r"\*\*研判方向\*\*:\s*(.+?)(?:\s*\||\n)", overseas_text)
+    if m:
+        direction = m.group(1).strip()
+        if any(kw in direction for kw in ['偏多', '看多']):
+            return 1
+        if any(kw in direction for kw in ['偏空', '看空']):
+            return -1
+    return 0
+
+
+def compute_bayes_adjusted_predictions(overseas_text: str | None) -> dict:
+    """
+    贝叶斯更新：读取TimesFM校准数据中各标的P50 prediction，
+    结合外盘方向信号做简单贝叶斯调整。
+    返回 {symbol_name: {'original_p50': x, 'adjusted_p50': y, 'sigma': z}, ...}。
+    若无TimesFM数据或外盘无方向信号，返回空dict。
+    """
+    import glob
+    import numpy as np
+    overseas_signal = extract_overseas_direction_value(overseas_text)
+    if overseas_signal == 0:
+        return {}
+
+    cal_dir = os.path.join(PROJECT_DIR, 'logs', 'timesfm_calibration')
+    cal_files = glob.glob(os.path.join(cal_dir, '*.json'))
+    if not cal_files:
+        return {}
+
+    results = {}
+    for cf in cal_files:
+        try:
+            with open(cf) as f:
+                d = json.load(f)
+        except (json.JSONDecodeError, OSError):
+            continue
+
+        code = d.get('code', '')
+        symbol_name = d.get('name', os.path.basename(cf).replace('.json', ''))
+        windows = d.get('windows_detail', [])
+        if not windows:
+            continue
+
+        last_win = windows[-1]
+        # P50 prediction = fc_5d (TimesFM 点预测)
+        original_p50 = last_win.get('fc_5d')
+        if original_p50 is None:
+            continue
+
+        # 估算sigma: 用预测区间的半宽作为波动率近似
+        p10 = last_win.get('p10_5d')
+        p90 = last_win.get('p90_5d')
+        if p10 is not None and p90 is not None and p90 > p10:
+            # P90-P10 ≈ 2.56σ for normal → σ ≈ (p90-p10)/2.56
+            sigma = (p90 - p10) / 2.56
+        else:
+            sigma = original_p50 * 0.02  # 默认2%波动
+
+        # 简单贝叶斯更新: adjusted_p50 = original_p50 + overseas_signal * 0.3 * sigma
+        adjusted_p50 = original_p50 + overseas_signal * 0.3 * sigma
+
+        if abs(adjusted_p50 - original_p50) / original_p50 > 0.01:
+            results[symbol_name] = {
+                'original_p50': round(original_p50, 2),
+                'adjusted_p50': round(adjusted_p50, 2),
+                'sigma': round(sigma, 2),
+                'overseas_signal': overseas_signal,
+            }
+
+    return results
+
+
 def load_ima_opinions(date_str: str) -> str | None:
     path = os.path.join(PROJECT_DIR, "reports", f"opinions_{date_str}.md")
     if os.path.exists(path):
@@ -527,6 +616,9 @@ def main():
     overseas_text = load_overseas_signal(date_str)
     opinions_text = load_ima_opinions(date_str)
     calibration_hint, last_review, rolling_metrics = load_calibration()
+
+    # ── 外盘冲击量化：贝叶斯更新TimesFM P50 ──
+    bayes_adjusted = compute_bayes_adjusted_predictions(overseas_text)
 
     records = []
     for symbol, name in TICKERS:
@@ -741,6 +833,11 @@ def main():
 
         if r['catalyst']:
             lines.append(f"  催化：{r['catalyst']}")
+
+        # 外盘冲击量化（贝叶斯更新）
+        if bayes_adjusted and r['name'] in bayes_adjusted:
+            ba = bayes_adjusted[r['name']]
+            lines.append(f"  （外盘±1调整后：{ba['adjusted_p50']:.2f}）")
 
         lines.append("")
 

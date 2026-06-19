@@ -80,7 +80,7 @@ class MarketTemperature:
         }
 
     def analyze_contradictions(self):
-        """检测五指标间的信号矛盾并生成解读"""
+        """检测五指标间的信号矛盾并生成解读（含多尺度嵌套：个股分位→板块联动→大盘温度）"""
         if len(self.signals) < 3:
             return
         hot_signals = [s for s in self.signals if s.signal in ('overheat', 'warm')]
@@ -103,7 +103,89 @@ class MarketTemperature:
         if margin and bias and margin.signal in ('overheat', 'warm') and bias.signal in ('cold', 'oversold', 'neutral'):
             contradictions.append("融资情绪热但偏股情绪中性 → 杠杆资金在追但长期趋势未跟上，警惕短期回调")
 
+        # ── 多尺度嵌套：个股TimesFM分位 → 板块联动 → 大盘温度 ──
+        self._add_stock_level_contradictions(contradictions, hot_signals, cold_signals)
+
         self.contradictions = contradictions
+
+    def _add_stock_level_contradictions(self, contradictions, hot_signals, cold_signals):
+        """读取TimesFM校准数据，检测个股分位与大盘温度的错位"""
+        import glob
+        import os as _os
+        cal_dir = _os.path.join(PROJECT_DIR, 'logs', 'timesfm_calibration')
+        cal_files = glob.glob(_os.path.join(cal_dir, '*.json'))
+        if not cal_files:
+            return
+
+        low_count = 0  # 处于预测分布低位的标的数
+        high_count = 0  # 处于预测分布高位的标的数
+        total_stocks = 0
+        stock_details = []
+
+        for cf in cal_files:
+            try:
+                with open(cf) as f:
+                    d = json.load(f)
+            except (json.JSONDecodeError, OSError):
+                continue
+
+            # 优先用 CI80_coverage 或 point_forecast；否则降级到最后一窗的 fc_5d / p10-p90
+            forecast = d.get('point_forecast') or d.get('recent_forecast')
+            ci80 = d.get('CI80_coverage')
+            windows = d.get('windows_detail', [])
+            if not windows:
+                continue
+
+            last_win = windows[-1]
+            fc = last_win.get('fc_5d')
+            p10 = last_win.get('p10_5d')
+            p90 = last_win.get('p90_5d')
+            actual = last_win.get('actual_5d')
+
+            if fc is None or p10 is None or p90 is None:
+                continue
+            if actual is None:
+                actual = fc  # fallback: 用预测中点
+            if p90 <= p10:
+                continue
+
+            # 计算 actual 在 [p10, p90] 中的分位
+            position_pct = (actual - p10) / (p90 - p10) * 100
+            symbol_name = d.get('name', _os.path.basename(cf).replace('.json', ''))
+            total_stocks += 1
+
+            if position_pct <= 20:
+                low_count += 1
+                stock_details.append(f"{symbol_name}(P{position_pct:.0f})")
+            elif position_pct >= 80:
+                high_count += 1
+                stock_details.append(f"{symbol_name}(P{position_pct:.0f})")
+
+        if total_stocks < 3:
+            return
+
+        low_ratio = low_count / total_stocks
+        high_ratio = high_count / total_stocks
+
+        # 大盘偏热 but 个股在低位 → 局部机会
+        if len(hot_signals) >= 3 and low_ratio >= 0.5:
+            contradictions.append(
+                "大盘温度偏热但多数个股处于预测分布低位 → 局部机会存在，建议精选标的"
+            )
+        elif len(hot_signals) >= 2 and low_ratio >= 0.6:
+            contradictions.append(
+                "大盘温度偏热但多数个股处于预测分布低位 → 局部机会存在，建议精选标的"
+            )
+
+        # 大盘偏冷 but 个股在高位 → 警惕情绪透支
+        if len(cold_signals) >= 3 and high_ratio >= 0.5:
+            contradictions.append(
+                "大盘偏冷但个股已脱离预测区间高位 → 警惕情绪透支"
+            )
+        elif len(cold_signals) >= 2 and high_ratio >= 0.6:
+            contradictions.append(
+                "大盘偏冷但个股已脱离预测区间高位 → 警惕情绪透支"
+            )
 
     def make_decision(self):
         """基于五指标综合生成一句话行动建议"""
