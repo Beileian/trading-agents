@@ -968,32 +968,63 @@ def _append_eval_dataset(state, prices, thresholds, overseas_dir, overseas_conf,
 
 def build_one_line_summary(prices, thresholds, overseas_dir, overseas_conf, breaches, sell_wrong, regime_alerts):
     """
-    收盘复盘「今日一句话」：聚合指数表现、卖出误判、价格穿越、温度计+外盘验证。
-    格式：{指数摘要}。{卖出误判/穿越简报}。{温度计方向+外盘验证}。{明日关注点}。
+    收盘复盘「今日一句话」：聚合指数表现、卖出误判、价格穿越、仓位调整、
+    板块联动、温度计+外盘验证。
+    格式：{指数+误判/穿越}。{仓位调整+板块联动}。{温度计+外盘}。{明日关注}。
+    
+    v2.6.4 改进四: 融入仓位调整信号 + 板块联动摘要
+    v2.6.3 改进五: 尾部标注算法版本
     """
     import os as _os, json as _json
     parts = []
 
-    # 指数摘要
+    # ── 第一句: 指数 + 核心事件 ──
     idx_info = []
     for n in ['上证50', '沪深300', '科创50']:
         if n in prices:
             idx_info.append(f"{n}{prices[n]['chg_pct']:+.2f}%")
     if idx_info:
-        parts.append(f"三大指数{' / '.join(idx_info)}")
+        events = []
+        if sell_wrong:
+            events.append(f"卖出误判{len(sell_wrong)}只({', '.join(sell_wrong)})")
+        if breaches:
+            b_names = '、'.join(list(set(b['name'] for b in breaches)))
+            events.append(f"穿越{len(breaches)}条({b_names})")
+        if events:
+            parts.append(f"{' / '.join(idx_info)} — {'；'.join(events)}")
+        else:
+            parts.append(f"{' / '.join(idx_info)} — 无卖出误判，无价格穿越")
 
-    # 卖出建议偏离/穿越简报
-    events = []
-    if sell_wrong:
-        events.append(f"卖出建议偏离{len(sell_wrong)}只（{'、'.join(sell_wrong)}）")
-    if breaches:
-        b_names = '、'.join(list(set(b['name'] for b in breaches)))
-        events.append(f"价格穿越{len(breaches)}条（{b_names}）")
-    if not events:
-        events.append("无卖出建议偏离，无价格穿越")
-    parts.append('；'.join(events))
+    # ── 第二句: 仓位调整 + 板块联动 (v2.6.4 新增) ──
+    sub_parts = []
+    # 仓位: 从 thresholds 中提取有调整的标的
+    pos_adjusted = []
+    for name, t in thresholds.items():
+        old_pos = t.get('_pos_original', None)
+        new_pos = t.get('pos', None)
+        if old_pos is not None and new_pos is not None and old_pos != new_pos:
+            try:
+                old_v = int(float(str(old_pos).replace('%','')))
+                new_v = int(float(str(new_pos).replace('%','')))
+                if old_v != new_v:
+                    pos_adjusted.append(f"{name}{old_v}%→{new_v}%")
+            except: pass
+    if pos_adjusted:
+        sub_parts.append(f"仓位调整: {', '.join(pos_adjusted)}")
+    # 板块联动
+    try:
+        from style_rotation_signals import compute_sector_linkage
+        si = compute_sector_linkage()
+        linked = si.get('linked_stocks', [])
+        if linked:
+            in_sector = '、'.join([s[0] for s in linked])
+            top_sector = f"{linked[0][1]}({linked[0][2]:+.1f}%)"
+            sub_parts.append(f"{in_sector}在强势{top_sector}板块内")
+    except: pass
+    if sub_parts:
+        parts.append('；'.join(sub_parts))
 
-    # 温度计方向 + 外盘验证
+    # ── 第三句: 温度计方向 + 外盘验证 ──
     temp_verdict = ""
     today_tag = NOW.strftime('%Y%m%d')
     daily_file = _os.path.join(PROJECT_DIR, 'logs', 'cognition_daily', f'{today_tag}.json')
@@ -1027,18 +1058,14 @@ def build_one_line_summary(prices, thresholds, overseas_dir, overseas_conf, brea
         overseas_match = '吻合' if (
             (bearish and actual_dir == '偏空') or (bullish and actual_dir == '偏多')
         ) else '偏离'
-        overseas_part = f"外盘预判{overseas_dir}实际{actual_dir}（{overseas_match}）"
-        if temp_verdict:
-            temp_verdict += f"，{overseas_part}"
-        else:
-            temp_verdict = overseas_part
+        overseas_part = f"外盘预判{overseas_dir}实际{actual_dir}{overseas_match}"
+        temp_verdict = f"{temp_verdict}，{overseas_part}" if temp_verdict else overseas_part
 
     if temp_verdict:
         parts.append(temp_verdict)
 
-    # 明日关注点
+    # ── 第四句: 明日关注点 ──
     tomorrow = ""
-    # 连续2天击穿支撑/阻力
     breach_names_today = set(b['name'] for b in breaches) if breaches else set()
     yesterday_tag = (NOW - timedelta(days=1)).strftime('%Y%m%d')
     yesterday_file = _os.path.join(PROJECT_DIR, 'logs', 'cognition_daily', f'{yesterday_tag}.json')
@@ -1055,13 +1082,11 @@ def build_one_line_summary(prices, thresholds, overseas_dir, overseas_conf, brea
     if consecutive:
         tomorrow = f"关注{'、'.join(sorted(consecutive))}是否确认趋势"
 
-    # 极端波动 >5%
     if not tomorrow:
         extreme_5 = [f"{n}{prices[n]['chg_pct']:+.2f}%" for n, p in prices.items() if abs(p['chg_pct']) >= 5]
         if extreme_5:
             tomorrow = f"关注{extreme_5[0]}连续异动风险"
 
-    # 温度计方向从偏热转中性
     if not tomorrow:
         y_mt = {}
         if _os.path.exists(yesterday_file):
@@ -1073,7 +1098,6 @@ def build_one_line_summary(prices, thresholds, overseas_dir, overseas_conf, brea
                 pass
         y_hot = y_mt.get('hot', 0)
         y_cold = y_mt.get('cold', 0)
-        today_tag = NOW.strftime('%Y%m%d')
         t_file = _os.path.join(PROJECT_DIR, 'logs', 'cognition_daily', f'{today_tag}.json')
         t_hot = t_cold = 0
         if _os.path.exists(t_file):
@@ -1380,6 +1404,29 @@ def build_report(prices, thresholds, overseas_dir, overseas_conf):
         src_line = " · ".join(f"{s}({c})" for s, c in source_info.items())
         L.append(f"> 数据源: {src_line} | 时间戳校验: {TODAY_DATE}")
     L.append(f"> *收盘复盘 · {TODAY_DATE} · AI辅助分析，不构成投资建议*")
+    # v2.6.4 改进五: 标注当日算法版本
+    algo_versions = []
+    try:
+        import subprocess, re
+        result = subprocess.run(
+            ['git', 'tag', '-l', 'v*', '--sort=-creatordate'],
+            capture_output=True, text=True, cwd=PROJECT_DIR, timeout=5
+        )
+        tags = [t.strip() for t in result.stdout.strip().split('\n') if t.strip()]
+        if tags:
+            latest = tags[0]
+            # 取最近4个版本标注
+            recent = tags[:4]
+            algo_versions.append(f"金桥{latest}")
+    except: pass
+    try:
+        from style_rotation_signals import compute_sector_linkage
+        si = compute_sector_linkage()  # 缓存命中
+        if si.get('linked_stocks'):
+            algo_versions.append("板块联动")
+    except: pass
+    if algo_versions:
+        L.append(f"> 算法: {' | '.join(algo_versions)}")
     
     return "\n".join(L), regime_alerts
 
