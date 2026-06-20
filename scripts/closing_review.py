@@ -1214,18 +1214,41 @@ def build_report(prices, thresholds, overseas_dir, overseas_conf):
         if not extreme:
             L.append("")
     
-    # ═══ 4. 建议方向偏离 ═══
-    L.append("**④ 建议方向 vs 实际方向**")
+    # ═══ 4. 推荐方向 vs 实际收盘方向 (P2-2 三列差异表) ═══
+    L.append("**④ 推荐方向 vs 实际收盘方向**")
     sell_wrong = []
+    mismatch_lines = []
     for name in ALL_NAMES:
         if name not in prices or name not in thresholds:
             continue
-        if thresholds[name].get("op") == "sell" and prices[name]["chg_pct"] > 0.5:
-            sell_wrong.append(f"{name} +{prices[name]['chg_pct']:.1f}%")
-    if sell_wrong:
-        L.append(f"卖出建议偏离（收涨）：{len(sell_wrong)} 只 — {'，'.join(sell_wrong)}")
-    else:
-        L.append("卖出建议方向匹配，无偏离")
+        p = prices[name]
+        t = thresholds[name]
+        op = t.get("op", "")
+        chg = p["chg_pct"]
+        rec_dir = {"sell": "卖出", "buy": "买入"}.get(op, "持有")
+        if chg > 0.5:
+            act_dir = f"↑ +{chg:.1f}%"
+        elif chg < -0.5:
+            act_dir = f"↓ {chg:.1f}%"
+        else:
+            act_dir = f"→ {chg:+.1f}%"
+        reason = "—"
+        if op == "sell" and chg > 0.5:
+            reason = "卖出判断偏早"
+            sell_wrong.append(f"{name} +{chg:.1f}%")
+        elif op == "buy" and chg < -0.5:
+            reason = "买入信号偏早"
+        elif op == "hold" and chg > 3:
+            reason = "持有偏保守"
+        elif op == "hold" and chg < -3:
+            reason = "未提示卖出"
+        emoji = "✅" if reason == "—" else "⚠️"
+        mismatch_lines.append(f"| {emoji} {name} | {rec_dir} | {act_dir} | {reason} |")
+
+    L.append("| 标的 | 推荐方向 | 实际方向 | 偏差原因 |")
+    L.append("|------|---------|---------|----------|")
+    for ml in mismatch_lines:
+        L.append(ml)
     L.append("")
     
     # ═══ 5. 价格穿越 ═══
