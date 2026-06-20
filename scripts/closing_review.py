@@ -1214,10 +1214,12 @@ def build_report(prices, thresholds, overseas_dir, overseas_conf):
         if not extreme:
             L.append("")
     
-    # ═══ 4. 推荐方向 vs 实际收盘方向 (P2-2 三列差异表) ═══
+    # ═══ 4. 推荐方向 vs 实际收盘方向 (P2-2 三列差异表 + P0 VWAP标注 + P5 仓位) ═══
     L.append("**④ 推荐方向 vs 实际收盘方向**")
     sell_wrong = []
     mismatch_lines = []
+    vwap_corrected = set()  # 记录被VWAP修正的标的
+    pos_notes = {}  # 仓位调整说明
     for name in ALL_NAMES:
         if name not in prices or name not in thresholds:
             continue
@@ -1243,12 +1245,31 @@ def build_report(prices, thresholds, overseas_dir, overseas_conf):
         elif op == "hold" and chg < -3:
             reason = "未提示卖出"
         emoji = "✅" if reason == "—" else "⚠️"
-        mismatch_lines.append(f"| {emoji} {name} | {rec_dir} | {act_dir} | {reason} |")
+        # P0: VWAP标注
+        sup = t.get("support")
+        res = t.get("resistance")
+        vwap_tag = ""
+        # 检查是否被VWAP修正过（从records中继承）
+        if t.get("_vwap_corrected"):
+            vwap_tag = "(VWAP)"
+            vwap_corrected.add(name)
+        sres_str = f"支{sup}/阻{res}" if sup and res else ""
+        if sres_str and vwap_tag:
+            sres_str += f" {vwap_tag}"
+        # P5: 仓位
+        pos_str = t.get("pos", "")
+        if not pos_str or pos_str == 0:
+            pos_str = ""
+        else:
+            pos_str = f"{int(float(str(pos_str).replace('%','')))}%"
+        mismatch_lines.append(f"| {emoji} {name} | {rec_dir} | {act_dir} | {reason} | {pos_str} |")
 
-    L.append("| 标的 | 推荐方向 | 实际方向 | 偏差原因 |")
-    L.append("|------|---------|---------|----------|")
+    L.append("| 标的 | 推荐 | 实际 | 偏差 | 仓位 |")
+    L.append("|------|------|------|------|------|")
     for ml in mismatch_lines:
         L.append(ml)
+    if vwap_corrected:
+        L.append(f"\n> 支撑阻力位标注(VWAP)表示经成交量加权修正；共{len(vwap_corrected)}只 — {'，'.join(sorted(vwap_corrected))}")
     L.append("")
     
     # ═══ 5. 价格穿越 ═══
@@ -1264,13 +1285,23 @@ def build_report(prices, thresholds, overseas_dir, overseas_conf):
     # ═══ 6. 市场温度计 ═══
     try:
         temp_lines = review_signal_quality()
-        # review_signal_quality 自带标题和内容
         L.extend(temp_lines)
     except Exception as e:
         L.append("**⑥ 市场温度计**")
         L.append(f"获取失败: {e}")
         L.append("")
-    
+
+    # ═══ P2-1 板块联动 ═══
+    try:
+        from style_rotation_signals import compute_sector_linkage
+        sector_info = compute_sector_linkage()
+        sl = sector_info.get('summary_line', '')
+        if sl:
+            L.append(f"⚡ {sl}")
+            L.append("")
+    except Exception:
+        pass
+
     # ═══ 7. 本周认知 ═══
     weekly_file = f"{PROJECT_DIR}/logs/cognition_weekly_{NOW.strftime('%Y-W%U')}.md"
     # 写入今日认知条目
