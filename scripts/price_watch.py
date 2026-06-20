@@ -141,12 +141,18 @@ def fetch_sina_prices():
                 
                 change_pct = (price - prev_close) / prev_close * 100 if prev_close != 0 else 0
                 
+                # 取开盘价和成交量（通達信异动检测所需）
+                open_price = float(fields[1]) if len(fields) > 1 and fields[1] else price
+                volume = float(fields[8]) if len(fields) > 8 and fields[8] else 0
+                
                 prices[name] = {
                     'price': price,
                     'change_pct': round(change_pct, 2),
                     'high': high,
                     'low': low,
                     'prev_close': prev_close,
+                    'open': open_price,
+                    'volume': volume,
                 }
         except Exception as e:
             print(f"[sina batch error] {batch}: {e}", file=sys.stderr)
@@ -203,6 +209,99 @@ def check_breaches(prices, thresholds):
                 'level': resistance, 'gap': gap,
                 'msg': f"🟢 {name} 突破阻力 {resistance}（现价 {price:.2f}，超涨 {gap:.1f}%）"
             })
+
+    return alerts
+
+
+def check_intraday_anomalies(prices):
+    """
+    通达信盘中异动信号检测 (P1).
+    三组信号：
+      1. 935放量 — 9:35前后5分钟窗口内成交量 > 5日均量的2倍
+      2. 开盘拉升 — 开盘后价格从开盘点位上涨 > 2% (高开回补创新高)
+      3. 尾盘拉升 — 14:50后价格从日内低点拉回 > 1.5%
+    返回异动告警列表。
+    """
+    import pandas as pd
+    alerts = []
+    now = datetime.now(TZ)
+    today_str = now.strftime("%Y-%m-%d")
+    t = now.time()
+    minutes = t.hour * 60 + t.minute
+
+    # 反查 SINA_MAP: name → sina_code
+    name_to_code = {v[1]: k for k, v in SINA_MAP.items()}
+
+    for name, pdata in prices.items():
+        if name not in name_to_code:
+            continue
+        sina_code = name_to_code[name]
+        price = pdata.get('price', 0)
+        volume = pdata.get('volume', 0)
+        open_price = pdata.get('open', 0)
+        low = pdata.get('low', price)
+
+        if price <= 0:
+            continue
+
+        # ── 信号1: 935放量 ──
+        # 只在 9:30-9:45 窗口内检测
+        if 9*60+30 <= minutes <= 9*60+45 and volume > 0:
+            # 用缓存数据计算5日均量
+            code = None
+            for ticker, n in [("000016.SH", "上证50"), ("000300.SH", "沪深300"),
+                              ("000688.SH", "科创50"), ("601288.SH", "农业银行"),
+                              ("601988.SH", "中国银行"), ("600036.SH", "招商银行"),
+                              ("600795.SH", "国电电力"), ("000066.SZ", "中国长城"),
+                              ("600562.SH", "国睿科技")]:
+                if n == name:
+                    code = ticker
+                    break
+            if code:
+                cache_map = {
+                    '000016.SH': '000016.SH-daily.csv', '000300.SH': '000300.SH-daily.csv',
+                    '000688.SH': '000688.SH-daily.csv', '601288.SH': '601288.SS-daily.csv',
+                    '601988.SH': '601988.SS-daily.csv', '600036.SH': '600036.SS-daily.csv',
+                    '600795.SH': '600795.SH-daily.csv', '000066.SZ': '000066.SZ-daily.csv',
+                    '600562.SH': '600562.SH-daily.csv',
+                }
+                cache_file = cache_map.get(code, '')
+                cache_path = os.path.join(PROJECT_DIR, 'data', 'cache', cache_file)
+                if os.path.exists(cache_path):
+                    try:
+                        df = pd.read_csv(cache_path)
+                        avg_vol_5d = df['Volume'].tail(5).mean()
+                        if avg_vol_5d > 0 and volume > avg_vol_5d * 2:
+                            ratio = volume / avg_vol_5d
+                            alerts.append({
+                                'name': name, 'price': price,
+                                'type': '935异动',
+                                'msg': f"⚡ {name} 935放量（成交{volume/1e8:.1f}亿，5日均量{avg_vol_5d/1e8:.1f}亿，倍数{ratio:.1f}x）"
+                            })
+                    except Exception:
+                        pass
+
+        # ── 信号2: 开盘拉升（高开回补创新高模式）──
+        # 条件: 非指数 + 当前价从开盘价拉升 > 2%
+        if open_price > 0:
+            open_rise = (price - open_price) / open_price * 100
+            if open_rise > 2:
+                alerts.append({
+                    'name': name, 'price': price,
+                    'type': '开盘异动',
+                    'msg': f"🔥 {name} 开盘拉升+{open_rise:.1f}%（从{open_price:.2f}→{price:.2f}）"
+                })
+
+        # ── 信号3: 尾盘拉升 ──
+        # 条件: 14:50后 + 从日内低点拉回 > 1.5%
+        if 14*60+50 <= minutes <= 15*60 and low > 0:
+            recovery = (price - low) / low * 100
+            if recovery > 1.5:
+                alerts.append({
+                    'name': name, 'price': price,
+                    'type': '尾盘异动',
+                    'msg': f"📈 {name} 尾盘拉升+{recovery:.1f}%（低{low:.2f}→{price:.2f}）"
+                })
 
     return alerts
 
@@ -299,7 +398,9 @@ def main():
         return
 
     alerts = check_breaches(prices, thresholds)
-    new_alerts = dedup_alerts(alerts)
+    anomaly_alerts = check_intraday_anomalies(prices)
+    all_alerts = alerts + anomaly_alerts
+    new_alerts = dedup_alerts(all_alerts)
     push_alerts(new_alerts)
 
 if __name__ == '__main__':
