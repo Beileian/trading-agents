@@ -328,6 +328,72 @@ def validate_support_resistance(llm_support: float | None, llm_resistance: float
     return 'ok', llm_support, llm_resistance
 
 
+def calc_volatility_adaptive_position(symbol: str, base_pos: float, total_temp_signal: str = 'neutral') -> float:
+    """
+    P5 波动率自适应仓位。
+    基于 60d vs 250d 年化波动率比例动态调整仓位：
+      - 高波动标的 (ratio>1.5) → 降低仓位到 max(base_pos*0.6, 5%)
+      - 低波动标的 (ratio<0.7) → 可适当提高到 min(base_pos*1.3, 30%)
+      - 正常波动 → 保持base_pos
+    总仓由市场温度信号调整：偏热→总仓上限70%，偏冷→60%，中性→80%
+    返回调整后仓位百分比。
+    """
+    import numpy as np
+    cache_file = TICKER_CACHE.get(symbol, '')
+    cache_path = os.path.join(PROJECT_DIR, 'data', 'cache', cache_file)
+    if not os.path.exists(cache_path) or base_pos <= 0:
+        return base_pos
+    try:
+        df = pd.read_csv(cache_path)
+        if len(df) < 60:
+            return base_pos
+        close = df['Close']
+        rets = close.pct_change().dropna()
+        ann_factor = np.sqrt(252)
+        vol_60d = float(rets.iloc[-60:].std() * ann_factor) if len(rets) >= 60 else float(rets.std() * ann_factor)
+        vol_250d = float(rets.std() * ann_factor) if len(rets) < 250 else float(rets.iloc[-250:].std() * ann_factor)
+        if vol_250d <= 0:
+            return base_pos
+
+        vol_ratio = vol_60d / vol_250d
+        if vol_ratio > 1.3:
+            adjusted = max(base_pos * 0.7, 5.0)
+            tag = 'high_vol'
+        elif vol_ratio < 0.85:
+            adjusted = min(base_pos * 1.2, 30.0)
+            tag = 'low_vol'
+        else:
+            adjusted = base_pos
+            tag = 'normal'
+
+        # 市场温度总仓调整
+        if total_temp_signal == 'warm':
+            cap = 0.70
+        elif total_temp_signal == 'cold':
+            cap = 0.60
+        else:
+            cap = 0.80
+        # 总仓上限体现在最终仓位：单票仓位×总仓系数
+        adjusted = min(adjusted, cap * 100)
+        adjusted = round(adjusted, 0)
+        return adjusted if adjusted > 0 else base_pos
+    except Exception:
+        return base_pos
+
+
+def get_total_temp_signal(mkt_temp) -> str:
+    """从市场温度计对象提取总体温度信号"""
+    if mkt_temp and mkt_temp.summary:
+        s = mkt_temp.summary
+        if '偏热' in s:
+            return 'warm'
+        elif '偏冷' in s:
+            return 'cold'
+        elif '中性' in s:
+            return 'neutral'
+    return 'neutral'
+
+
 def calc_bias_direction(symbol):
     cache_file = TICKER_CACHE.get(symbol, '')
     cache_path = os.path.join(PROJECT_DIR, 'data', 'cache', cache_file)
@@ -912,6 +978,14 @@ def main():
                     print(f"  [开盘价覆盖] {name}: {old_price}→{r['price']}")
                 break
 
+    # ── 提前获取市场温度（供仓位+合成使用）──
+    mkt_temp = None
+    try:
+        from style_rotation_signals import compute_market_temperature, format_compact_for_push
+        mkt_temp = compute_market_temperature()
+    except Exception as e:
+        print(f"[signals] style_rotation unavailable: {e}", file=sys.stderr)
+
     # ── VWAP支撑/阻力修正（P0: 通达信筹码分布思路）──
     vwap_corrections = 0
     for i, r in enumerate(records):
@@ -936,6 +1010,25 @@ def main():
     if vwap_corrections:
         print(f"  共 {vwap_corrections} 只标的采用VWAP修正")    
 
+    # ── P5: 波动率自适应仓位调整 ──
+    total_signal = get_total_temp_signal(mkt_temp)
+    pos_adjustments = 0
+    for i, r in enumerate(records):
+        if r['name'] in [n for _, n in TICKERS]:
+            symbol = [s for s, n2 in TICKERS if n2 == r['name']][0]
+            try:
+                old_pos = float(r['pos']) if r['pos'] and r['pos'] != '-' else 10
+            except (ValueError, TypeError):
+                old_pos = 10
+            new_pos = calc_volatility_adaptive_position(symbol, old_pos, total_signal)
+            if abs(new_pos - old_pos) > 1:
+                r['pos'] = f"{new_pos:.0f}%"
+                r['_pos_adjusted'] = True
+                pos_adjustments += 1
+                print(f"  [仓位调整] {r['name']}: {old_pos:.0f}%→{new_pos:.0f}% (温度:{total_signal})")
+    if pos_adjustments:
+        print(f"  共 {pos_adjustments} 只标的仓位调整")    
+
     # ── Schema 校验 ──
     passed, errors = validate_records(records)
     if not passed:
@@ -951,14 +1044,8 @@ def main():
     lines.append("交易推荐 · 开盘前推送")
     lines.append("")
 
-    # ── 全局合成判断（聚合全部信号前）──
-    # 先获取温度计（供合成使用）
-    mkt_temp = None
-    try:
-        from style_rotation_signals import compute_market_temperature, format_compact_for_push
-        mkt_temp = compute_market_temperature()
-    except Exception as e:
-        print(f"[signals] style_rotation unavailable: {e}", file=sys.stderr)
+    # ── 全局合成判断（聚合全部信号）──
+    # mkt_temp 已在VWAP修正阶段获取
 
     synthesis = build_synthesis_paragraph(mkt_temp, overseas_text, records)
     if synthesis:
