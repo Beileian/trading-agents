@@ -223,6 +223,111 @@ def extract(section, key):
     return '-'
 
 
+def calc_vwap_support_resistance(symbol: str) -> tuple[float | None, float | None]:
+    """
+    基于 VWAP（成交量加权均价）计算支撑/阻力位，替代纯均线偏移。
+    通达信筹码分布思路：支撑=近期高量区加权均价，阻力=近期高量区均价上沿。
+
+    方法:
+      - 取近20日数据，计算每日 VWAP = (High+Low+Close)/3 * Volume 加权
+      - 支撑位 = 20日VWAP - 0.5×ATR(14)
+      - 阻力位 = 20日VWAP + 0.5×ATR(14)
+      - VWAP 本身作为中枢位，支撑/阻力各偏移半倍ATR
+    返回 (support, resistance)，失败返回 (None, None)
+    """
+    cache_file = TICKER_CACHE.get(symbol, '')
+    cache_path = os.path.join(PROJECT_DIR, 'data', 'cache', cache_file)
+    if not os.path.exists(cache_path):
+        return None, None
+    try:
+        df = pd.read_csv(cache_path, parse_dates=['Date'])
+        df = df.set_index('Date').sort_index()
+        df = df.tail(60)  # 取近60日保证ATR稳定
+        if len(df) < 14:
+            return None, None
+
+        # 每日典型价格
+        df['typical'] = (df['High'] + df['Low'] + df['Close']) / 3
+        # 20日VWAP
+        df['tv'] = df['typical'] * df['Volume']
+        df['cum_tv'] = df['tv'].rolling(20).sum()
+        df['cum_vol'] = df['Volume'].rolling(20).sum()
+        df['vwap20'] = df['cum_tv'] / df['cum_vol']
+
+        # ATR(14)
+        df['tr'] = pd.concat([
+            df['High'] - df['Low'],
+            abs(df['High'] - df['Close'].shift(1)),
+            abs(df['Low'] - df['Close'].shift(1))
+        ], axis=1).max(axis=1)
+        df['atr14'] = df['tr'].rolling(14).mean()
+
+        latest = df.iloc[-1]
+        vwap = latest['vwap20']
+        atr = latest['atr14']
+        if pd.isna(vwap) or pd.isna(atr) or atr <= 0:
+            return None, None
+
+        support = round(vwap - 0.5 * atr, 2)
+        resistance = round(vwap + 0.5 * atr, 2)
+        return support, resistance
+    except Exception:
+        return None, None
+
+
+def validate_support_resistance(llm_support: float | None, llm_resistance: float | None,
+                                current_price: float, vwap_support: float, vwap_resistance: float) -> tuple[str, float | None, float | None]:
+    """
+    验证 LLM 给的支撑/阻力是否合理，不合理则用 VWAP 修正。
+    规则:
+      1. 支撑位 > 当前价 → 不合理（支撑应在价下）
+      2. 阻力位 < 当前价 → 不合理（阻力应在价上）
+      3. 支撑到阻力间距 < 0.3×VWAP间距 → 太窄
+      4. 支撑到阻力间距 > 4×VWAP间距 → 太宽
+      5. LLM支撑阻力中点偏离VWAP中枢超过1.2×VWAP半带宽 → 修正
+    """
+    if llm_support is None or llm_resistance is None:
+        return 'no_data', None, None
+    if vwap_support is None or vwap_resistance is None:
+        return 'ok', llm_support, llm_resistance
+
+    llm_gap = llm_resistance - llm_support
+    if llm_gap <= 0:
+        return 'invalid', vwap_support, vwap_resistance
+
+    vwap_gap = vwap_resistance - vwap_support
+    if vwap_gap <= 0:
+        return 'ok', llm_support, llm_resistance
+
+    vwap_mid = (vwap_support + vwap_resistance) / 2
+    vwap_half = vwap_gap / 2
+
+    llm_mid = (llm_support + llm_resistance) / 2
+    mid_deviation = abs(llm_mid - vwap_mid) / vwap_half
+
+    verdict = 'ok'
+
+    # 规则1: 支撑位在价上
+    if current_price and llm_support > current_price:
+        verdict = 'corrected'
+    # 规则2: 阻力位在价下
+    if current_price and llm_resistance < current_price:
+        verdict = 'corrected'
+    # 规则3: 间距太窄
+    if llm_gap < vwap_gap * 0.3:
+        verdict = 'corrected'
+    # 规则4: 间距太宽
+    if llm_gap > vwap_gap * 4:
+        verdict = 'corrected'
+    # 规则5: 中枢偏移
+    if mid_deviation > 1.2:
+        verdict = 'corrected'
+
+    if verdict != 'ok':
+        return verdict, vwap_support, vwap_resistance
+    return 'ok', llm_support, llm_resistance
+
+
 def calc_bias_direction(symbol):
     cache_file = TICKER_CACHE.get(symbol, '')
     cache_path = os.path.join(PROJECT_DIR, 'data', 'cache', cache_file)
@@ -806,6 +911,30 @@ def main():
                 if old_price and old_price != "-" and old_price != r["price"]:
                     print(f"  [开盘价覆盖] {name}: {old_price}→{r['price']}")
                 break
+
+    # ── VWAP支撑/阻力修正（P0: 通达信筹码分布思路）──
+    vwap_corrections = 0
+    for i, r in enumerate(records):
+        if r['name'] in [n for _, n in TICKERS]:
+            symbol = [s for s, n2 in TICKERS if n2 == r['name']][0]
+            vwap_s, vwap_r = calc_vwap_support_resistance(symbol)
+            if vwap_s is None or vwap_r is None:
+                continue
+            try:
+                sup_val = float(r['support']) if r['support'] and r['support'] != '-' else None
+                res_val = float(r['resistance']) if r['resistance'] and r['resistance'] != '-' else None
+                price_val = float(r['price']) if r['price'] and r['price'] != '-' else None
+            except (ValueError, TypeError):
+                sup_val, res_val, price_val = None, None, None
+            verdict, new_s, new_r = validate_support_resistance(sup_val, res_val, price_val, vwap_s, vwap_r)
+            if verdict != 'ok':
+                r['support'] = str(new_s)
+                r['resistance'] = str(new_r)
+                r['_vwap_corrected'] = True
+                vwap_corrections += 1
+                print(f"  [VWAP修正] {r['name']}: LLM支撑={sup_val}/阻力={res_val} → VWAP支撑={new_s}/阻力={new_r} (原因:{verdict})")
+    if vwap_corrections:
+        print(f"  共 {vwap_corrections} 只标的采用VWAP修正")    
 
     # ── Schema 校验 ──
     passed, errors = validate_records(records)
