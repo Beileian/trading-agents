@@ -1062,6 +1062,18 @@ def main():
     elif not mkt_temp:
         pass  # 已在 try/except 打印错误
 
+    # ── P2 板块联动 (通达信"发现"功能思路) ──
+    sector_info = {}
+    try:
+        from style_rotation_signals import compute_sector_linkage
+        sector_info = compute_sector_linkage(mkt_temp)
+        sl = sector_info.get('summary_line', '')
+        if sl:
+            lines.append(sl)
+            lines.append("")
+    except Exception as e:
+        print(f"[signals] sector_linkage unavailable: {e}", file=sys.stderr)
+
     # ── 复盘摘要 200-300字 ──
     if last_review and last_review.get("review_summary"):
         lines.append(last_review["review_summary"])

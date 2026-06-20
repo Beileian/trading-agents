@@ -723,8 +723,91 @@ def calc_margin_sentiment() -> Optional[SignalLight]:
 
 
 # ═══════════════════════════════════════════════════════════════
-# 主入口
+# 指标六: 板块联动 (P2 通达信"发现"功能思路)
 # ═══════════════════════════════════════════════════════════════
+
+def compute_sector_linkage(mkt_temp: MarketTemperature | None = None) -> dict:
+    """
+    从申万一级行业指数找出当日强势板块, 与金桥自选池交叉匹配。
+    返回: {
+        'strong_sectors': [(板块名, 涨跌幅%), ...],  # Top 3
+        'linked_stocks': [(标的名, 板块名, 板块涨跌幅), ...],  # 在强势板块的自选
+        'summary_line': str  # 一句话摘要供推送用
+    }
+    """
+    from symbols_config import SYMBOL_SECTOR_MAP, SWS_SECTOR_INDEX
+    try:
+        # 缓存: 同日/同交易日不重复请求（周末用周五缓存）
+        import json as _json
+        cache_file = os.path.join(DATA_CACHE, 'sw_sector_daily.json')
+        today = NOW()
+        today_str = today.strftime('%Y%m%d')
+        # 周末回退到最近交易日
+        cache_date = today_str
+        if today.weekday() >= 5:
+            offset = today.weekday() - 4
+            cache_date = (today - timedelta(days=offset)).strftime('%Y%m%d')
+        sector_pct = {}
+        cache_valid = False
+        if os.path.exists(cache_file):
+            try:
+                with open(cache_file) as f:
+                    cache_data = _json.load(f)
+                cached_date = cache_data.get('date', '')
+                if cached_date == cache_date or cached_date == today_str:
+                    sector_pct = cache_data.get('data', {})
+                    cache_valid = True
+            except Exception:
+                pass
+
+        if not cache_valid:
+            for code, name in SWS_SECTOR_INDEX.items():
+                try:
+                    df = ak.index_hist_sw(symbol=code, period='day')
+                    if df is not None and len(df) >= 2:
+                        today_close = float(df['收盘'].iloc[-1])
+                        yesterday_close = float(df['收盘'].iloc[-2])
+                        if yesterday_close > 0:
+                            pct = (today_close - yesterday_close) / yesterday_close * 100
+                            sector_pct[name] = round(pct, 2)
+                except Exception:
+                    continue
+            # 写入缓存
+            if sector_pct:
+                os.makedirs(DATA_CACHE, exist_ok=True)
+                with open(cache_file, 'w') as f:
+                    _json.dump({'date': today_str, 'data': sector_pct}, f)
+
+        if not sector_pct:
+            return {'strong_sectors': [], 'linked_stocks': [], 'summary_line': ''}
+        # Top 3 强势板块
+        sorted_sectors = sorted(sector_pct.items(), key=lambda x: x[1], reverse=True)
+        top3 = sorted_sectors[:3]
+        strong_set = {s[0] for s in top3}
+        # 匹配自选
+        linked = []
+        for stock_name, sw_code in SYMBOL_SECTOR_MAP.items():
+            if sw_code is None:
+                continue
+            sector_name = SWS_SECTOR_INDEX.get(sw_code, '')
+            if sector_name in strong_set and sector_name in sector_pct:
+                linked.append((stock_name, sector_name, sector_pct[sector_name]))
+        # 构建摘要
+        top_names = '、'.join([f'{n}({p:+.1f}%)' for n, p in top3])
+        summary = ''
+        if linked:
+            linked_names = '、'.join([s[0] for s in linked])
+            summary = f"板块联动：强势板块 {top_names} | 自选中 {linked_names} 在强势板块内"
+        else:
+            summary = f"板块联动：强势板块 {top_names} | 自选暂无标的在Top3板块内"
+        return {
+            'strong_sectors': top3,
+            'linked_stocks': linked,
+            'summary_line': summary,
+        }
+    except Exception as e:
+        print(f"[style_rotation] sector_linkage: {e}", file=sys.stderr)
+        return {'strong_sectors': [], 'linked_stocks': [], 'summary_line': ''}
 
 def compute_market_temperature() -> MarketTemperature:
     temp = MarketTemperature()
