@@ -11,7 +11,7 @@
       "rationale": "结构不合法的输出无法进入下游推送链路，这是硬门槛",
       "weight": "veto",
       "judge": "script",
-      "script": "validate_schema.py",
+      "script": "rubrics/validate_schema.py",
       "pass_condition": "exit code 0",
       "fail_action": "reject_and_retry"
     },

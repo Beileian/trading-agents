@@ -92,6 +92,29 @@ Schema 校验经 $MAX_GEN_RETRIES 次重试仍未通过，已阻断推送。
     exit 1
 fi
 
+# 步骤3.5: Rubric 质量评估
+RUBRIC_SCRIPT="$PROJECT_DIR/rubrics/run_rubrics.py"
+RUBRIC_PASS=true
+if [ -f "$RUBRIC_SCRIPT" ] && [ -f "$TRADE_FILE" ]; then
+    echo "[3.5/5] Rubric质量评估..."
+    /usr/bin/python3 "$RUBRIC_SCRIPT" "$TRADE_FILE" 2>&1 || {
+        RUBRIC_EXIT=$?
+        if [ $RUBRIC_EXIT -eq 2 ]; then
+            echo "[RUBRIC] REJECT — 质量门槛未通过，阻断推送"
+            echo "# 🚨 交易推荐质量不达标
+
+Rubric评估判定为 REJECT（veto项/方向一致性未通过）。
+时间: $(TZ=Asia/Shanghai date +%Y-%m-%d\ %H:%M:%S)
+详情: $PROJECT_DIR/rubrics/rubric_log.jsonl" | python3 "$PUSH_SCRIPT" 2>/dev/null
+            exit 1
+        elif [ $RUBRIC_EXIT -eq 1 ]; then
+            echo "[RUBRIC] LOW_CONFIDENCE — 部分项未通过，标记为低置信度推送"
+        fi
+    }
+else
+    echo "[3.5/5] Rubric质量评估... 跳过（脚本或报告缺失）"
+fi
+
 # 步骤4: 虚拟盘执行（基于今日交易推荐）
 echo "[4/5] 虚拟盘执行..."
 /usr/bin/python3 "$SCRIPT_DIR/paper_trading.py" execute "$DATE_STR" 2>&1 || echo "[WARN] 虚拟盘执行失败"
@@ -104,8 +127,18 @@ OPINION_FILE="$REPORT_DIR/opinions_${DATE_TAG}.md"
 
 HAS_CONTENT=false
 
+# Rubric 低置信度标记
+RUBRIC_TAG=""
+RUBRIC_LOG="$PROJECT_DIR/rubrics/rubric_log.jsonl"
+if [ -f "$RUBRIC_LOG" ]; then
+    LAST_VERDICT=$(tail -1 "$RUBRIC_LOG" 2>/dev/null | python3 -c "import sys,json; d=json.load(sys.stdin); print(d.get('verdict',''))" 2>/dev/null || echo "")
+    if [ "$LAST_VERDICT" = "low_confidence" ]; then
+        RUBRIC_TAG="⚠️ 低置信度 "
+    fi
+fi
+
 # 构建推送内容头部
-echo "# A股开盘前分析 · $DATE_STR" > "$PUSH_FILE"
+echo "# ${RUBRIC_TAG}A股开盘前分析 · $DATE_STR" > "$PUSH_FILE"
 echo "" >> "$PUSH_FILE"
 
 if [ -f "$TRADE_FILE" ]; then
