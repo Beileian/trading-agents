@@ -97,7 +97,12 @@ RUBRIC_SCRIPT="$PROJECT_DIR/rubrics/run_rubrics.py"
 RUBRIC_PASS=true
 if [ -f "$RUBRIC_SCRIPT" ] && [ -f "$TRADE_FILE" ]; then
     echo "[3.5/5] Rubric质量评估..."
-    /usr/bin/python3 "$RUBRIC_SCRIPT" "$TRADE_FILE" 2>&1 || {
+    ANALYSIS_FILE="$REPORT_DIR/trading_analysis_${DATE_TAG}.md"
+    RUBRIC_ARGS="$TRADE_FILE"
+    if [ -f "$ANALYSIS_FILE" ]; then
+        RUBRIC_ARGS="$TRADE_FILE --analysis $ANALYSIS_FILE"
+    fi
+    /usr/bin/python3 "$RUBRIC_SCRIPT" $RUBRIC_ARGS 2>&1 || {
         RUBRIC_EXIT=$?
         if [ $RUBRIC_EXIT -eq 2 ]; then
             echo "[RUBRIC] REJECT — 质量门槛未通过，阻断推送"

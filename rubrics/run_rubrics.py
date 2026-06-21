@@ -103,9 +103,27 @@ def load_rubric() -> dict:
         return json.load(f)
 
 
-def evaluate_llm_item(item: dict, report_text: str) -> dict:
+def evaluate_llm_item(item: dict, report_text: str, analysis_text: str = "") -> dict:
     """对 LLM 评判项进行评估"""
-    prompt = item["prompt"] + "\n\n--- 以下是待评估的交易推荐报告 ---\n\n" + report_text
+    prompt = item["prompt"] + "\n\n--- 以下是待评估的交易推荐信号表 ---\n\n" + report_text
+    if analysis_text:
+        # 取每只标的的推理部分（DeepSeek 交易决策 表格后的简要理由），不超过 3000 字
+        import re as _re
+        reasoning_parts = []
+        for block in _re.split(r'### \d{6}\.', analysis_text):
+            m = _re.search(r'\*\*简要理由\*\*\s*\|\s*(.+?)(?:\n\n|---)', block, _re.DOTALL)
+            if m:
+                reasoning_parts.append(m.group(1).strip()[:300])
+            else:
+                # fallback: match markdown table row
+                m2 = _re.search(r'\*\*简要理由\*\*\s*\|\s*(.+?)(?:\n)', block)
+                if m2:
+                    reasoning_parts.append(m2.group(1).strip()[:300])
+        if reasoning_parts:
+            prompt += "\n\n--- 以下是每只标的的详细分析推理（来自技术分析报告） ---\n\n"
+            for i, rp in enumerate(reasoning_parts):
+                prompt += f"标的{i+1}推理: {rp}\n"
+            prompt = prompt[:6000]  # 超长截断
     # 截断以防止超 token
     if len(prompt) > 8000:
         prompt = prompt[:8000] + "\n\n[...报告过长已截断...]"
@@ -218,16 +236,27 @@ def write_log(rubric: dict, report_file: str, verdict: dict, results: list[dict]
 
 def main():
     if len(sys.argv) < 2:
-        print("用法: python3 rubrics/run_rubrics.py <report_file>", file=sys.stderr)
+        print("用法: python3 rubrics/run_rubrics.py <report_file> [--analysis <analysis_file>]", file=sys.stderr)
         sys.exit(1)
 
     report_file = sys.argv[1]
+    analysis_file = None
+    if "--analysis" in sys.argv:
+        idx = sys.argv.index("--analysis")
+        if idx + 1 < len(sys.argv):
+            analysis_file = sys.argv[idx + 1]
+
     if not os.path.exists(report_file):
         print(f"文件不存在: {report_file}", file=sys.stderr)
         sys.exit(1)
 
     with open(report_file) as f:
         report_text = f.read()
+
+    analysis_text = ""
+    if analysis_file and os.path.exists(analysis_file):
+        with open(analysis_file) as f:
+            analysis_text = f.read()
 
     rubric = load_rubric()
     items = rubric["items"]
@@ -248,7 +277,7 @@ def main():
             script = item["script"]
             res = run_script(script, [report_file])
         elif judge == "llm":
-            res = evaluate_llm_item(item, report_text)
+            res = evaluate_llm_item(item, report_text, analysis_text)
         else:
             res = {"pass": False, "error": f"未知评判方式: {judge}"}
 
