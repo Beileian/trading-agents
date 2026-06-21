@@ -1,0 +1,64 @@
+{
+  "name": "交易推荐质量",
+  "description": "对 generate_trade_signals.py LLM 输出的多维质量评估标准",
+  "version": "1.0.0",
+  "created": "2026-06-21",
+  "aggregation": "weighted_sum_with_veto",
+  "items": [
+    {
+      "id": "schema_validity",
+      "description": "输出必须通过 JSON Schema 结构校验",
+      "rationale": "结构不合法的输出无法进入下游推送链路，这是硬门槛",
+      "weight": "veto",
+      "judge": "script",
+      "script": "validate_schema.py",
+      "pass_condition": "exit code 0",
+      "fail_action": "reject_and_retry"
+    },
+    {
+      "id": "factual_accuracy",
+      "description": "推荐中引用的关键数字（PE、收盘价、涨跌幅）与数据源一致",
+      "rationale": "LLM 可能幻觉数值，需要交叉验证。事实性错误会直接摧毁推荐可信度",
+      "weight": "high",
+      "judge": "script",
+      "script": "rubrics/check_factual.py",
+      "pass_condition": "所有引用数字与 AKShare/Yahoo 数据的偏差 < 5%",
+      "fail_action": "mark_low_confidence"
+    },
+    {
+      "id": "logic_completeness",
+      "description": "推荐理由覆盖四个必要维度：行业背景、财务/估值分析、技术面、风险提示",
+      "rationale": "单维度推荐说服力不足。但不同于事实性错误，维度缺失不一定是错的，只是不够完整",
+      "weight": "medium",
+      "judge": "llm",
+      "prompt": "检查以下交易推荐是否包含这四个维度：1)行业/板块背景 2)财务数据或估值分析 3)技术面或资金面 4)具体风险提示。每个维度0-1分。",
+      "pass_condition": "总分 >= 2.5",
+      "fail_action": "mark_low_confidence"
+    },
+    {
+      "id": "risk_specificity",
+      "description": "风险提示包含至少一个具体风险（如'原材料成本上升'），而非笼统措辞（如'注意风险'）",
+      "rationale": "笼统风险提示没有信息量，是 LLM 偷懒的常见模式",
+      "weight": "medium",
+      "judge": "llm",
+      "prompt": "判断风险提示部分是否包含至少一个具体、可指认的风险因素（如行业政策变化、原材料价格波动、竞争格局恶化等），而非笼统表述。是/否。",
+      "pass_condition": "返回'是'",
+      "fail_action": "mark_low_confidence"
+    },
+    {
+      "id": "action_consistency",
+      "description": "推荐方向（买入/持有/卖出）与理由中的逻辑一致，不出现'基本面恶化但建议买入'的矛盾",
+      "rationale": "偶尔 LLM 的方向判断和理由论述自相矛盾",
+      "weight": "high",
+      "judge": "llm",
+      "prompt": "判断推荐的交易方向（买入/卖出/持有）是否与推荐理由中的核心论述逻辑一致。是否存在方向性矛盾？是/否（是=一致，否=有矛盾）",
+      "pass_condition": "返回'是'",
+      "fail_action": "reject_and_retry"
+    }
+  ],
+  "thresholds": {
+    "low_confidence": "任一 high 项未通过或总分 < 0.6",
+    "reject": "veto 项未通过或 action_consistency 未通过"
+  },
+  "log": "rubrics/rubric_log.jsonl"
+}
