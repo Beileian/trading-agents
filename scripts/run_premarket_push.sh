@@ -93,6 +93,7 @@ Schema 校验经 $MAX_GEN_RETRIES 次重试仍未通过，已阻断推送。
 fi
 
 # 步骤3.5: Rubric 质量评估
+TRADE_FILE="$REPORT_DIR/trade_signals_${DATE_TAG}.md"
 RUBRIC_SCRIPT="$PROJECT_DIR/rubrics/run_rubrics.py"
 RUBRIC_PASS=true
 if [ -f "$RUBRIC_SCRIPT" ] && [ -f "$TRADE_FILE" ]; then
@@ -127,9 +128,7 @@ echo "[4/5] 虚拟盘执行..."
 # 步骤5: 拼装并推送
 echo "[5/5] 拼装推送..."
 SIGNAL_FILE="$PROJECT_DIR/reports/overseas_signal_${DATE_STR}.md"
-TRADE_FILE="$REPORT_DIR/trade_signals_${DATE_TAG}.md"
 OPINION_FILE="$REPORT_DIR/opinions_${DATE_TAG}.md"
-
 HAS_CONTENT=false
 
 # Rubric 低置信度标记
