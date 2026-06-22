@@ -96,6 +96,21 @@ SYMBOL_SECTOR_MAP = {
     "中证机器人": "801890",    # 机械设备
 }
 
+# update_daily_cache push2his 兜底: ticker → eastmoney secid (market.code)
+# market: 1=沪市, 0=深市
+TICKER_EM_MAP = {
+    "000016.SH": "1.000016",
+    "000300.SH": "1.000300",
+    "000688.SH": "1.000688",
+    "601288.SH": "1.601288",
+    "601988.SH": "1.601988",
+    "600036.SH": "1.600036",
+    "600795.SH": "1.600795",
+    "000066.SZ": "0.000066",
+    "600562.SH": "1.600562",
+    "562500.SH": "1.562500",
+}
+
 # 启动时校验一致性
 _derived = derive_sina_map()
 for ticker, expected in TICKER_SINA_MAP.items():

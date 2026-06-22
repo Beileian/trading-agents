@@ -1,13 +1,13 @@
 #!/usr/bin/env python3
 """
 A股日线缓存更新脚本 — 拉取最新交易数据追加到本地 CSV
-v1.1: 新浪主源 + 腾讯兜底（多源交叉保障缓存连续性）
+v1.2: 新浪主源 → 腾讯兜底 → push2his 第三兜底（多源交叉保障）
 
-数据源: 新浪财经 K线接口（主）→ 腾讯日K线（兜底），均免 API key
+数据源: 新浪财经 K线（主）→ 腾讯日K线（兜底1）→ 东方财富 push2his 日K线（兜底2）
 用法: python3 update_daily_cache.py
 """
 
-import sys, os, time, json
+import sys, os, time, json, urllib.request
 import requests
 import pandas as pd
 from datetime import datetime, timezone, timedelta
@@ -51,6 +51,60 @@ def fetch_sina_daily(symbol: str) -> list[dict]:
         return records
     except Exception as e:
         print(f"  [WARN] {symbol} 新浪K线失败: {e}")
+        return []
+
+
+def fetch_push2his_daily(ticker: str) -> list[dict]:
+    """从东方财富 push2his 日K线接口获取最新日线数据（web_fetch 可用通道）
+    
+    push2his 是东方财富历史K线接口，klt=101=日K，lmt=3=最近3根。
+    当天日K在盘中会动态更新收盘价字段，等效于实时报价。
+    此接口不同 push2 实时行情——它不需要浏览器级headers，直连可用。
+    """
+    import symbols_config
+    secid = symbols_config.TICKER_EM_MAP.get(ticker)
+    if not secid:
+        return []
+    
+    url = (
+        f"https://push2his.eastmoney.com/api/qt/stock/kline/get"
+        f"?secid={secid}&fields1=f1,f2,f3,f4"
+        f"&fields2=f51,f52,f53,f54,f55,f56,f57,f58,f59,f60,f61"
+        f"&klt=101&fqt=1&end=20500101&lmt=3"
+    )
+    
+    headers = {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+        "Referer": "https://quote.eastmoney.com/",
+    }
+    
+    try:
+        req = urllib.request.Request(url, headers=headers)
+        resp = urllib.request.urlopen(req, timeout=10)
+        data = json.loads(resp.read())
+        if not data or data.get('rc') != 0 or not data.get('data'):
+            return []
+        
+        klines = data['data'].get('klines', [])
+        records = []
+        for kline in klines:
+            parts = kline.split(',')
+            if len(parts) < 11:
+                continue
+            try:
+                records.append({
+                    "Date": pd.to_datetime(parts[0]),
+                    "Open": float(parts[1]),
+                    "Close": float(parts[2]),
+                    "High": float(parts[3]),
+                    "Low": float(parts[4]),
+                    "Volume": float(parts[5]),
+                })
+            except (ValueError, IndexError):
+                continue
+        return records
+    except Exception as e:
+        print(f"  [WARN] {ticker} push2his 失败: {e}")
         return []
 
 
@@ -110,29 +164,28 @@ def update_cache(cache_file: str, symbol: str) -> int:
                         "600795.SH": "国电电力", "000066.SZ": "中国长城", "600562.SH": "国睿科技"}
             cn_name = name_map.get(ticker_name)
             if cn_name:
-                # 尝试今天和昨天的快照
-                for dt_tag in [datetime.now(TZ).strftime("%Y%m%d")]:
-                    # 也是前一天快照
-                    yesterday = (datetime.now(TZ) - timedelta(days=1)).strftime("%Y%m%d")
-                    snapshot_file = f"{os.path.dirname(CACHE_DIR)}/reports/close_snapshot_{yesterday}.json"
-                    if os.path.exists(snapshot_file):
-                        with open(snapshot_file) as f:
-                            snap = json.load(f)
-                        if cn_name in snap:
-                            print(f"  [FALLBACK] 新浪失败，从收盘快照追加 {cn_name}={snap[cn_name]}")
-                            import json as _json
-                            today_date = datetime.now(TZ).date()
-                            new_data = [{
-                                "Date": pd.to_datetime(today_date),
-                                "Open": snap[cn_name],
-                                "High": snap[cn_name],
-                                "Low": snap[cn_name],
-                                "Close": snap[cn_name],
-                                "Volume": 0,
-                            }]
-                        break
+                yesterday = (datetime.now(TZ) - timedelta(days=1)).strftime("%Y%m%d")
+                snapshot_file = f"{os.path.dirname(CACHE_DIR)}/reports/close_snapshot_{yesterday}.json"
+                if os.path.exists(snapshot_file):
+                    with open(snapshot_file) as f:
+                        snap = json.load(f)
+                    if cn_name in snap:
+                        print(f"  [FALLBACK] 新浪失败，从收盘快照追加 {cn_name}={snap[cn_name]}")
+                        today_date = datetime.now(TZ).date()
+                        new_data = [{
+                            "Date": pd.to_datetime(today_date),
+                            "Open": snap[cn_name],
+                            "High": snap[cn_name],
+                            "Low": snap[cn_name],
+                            "Close": snap[cn_name],
+                            "Volume": 0,
+                        }]
+        # 快照也失败 → push2his 兜底（东方财富日K，含当天动态收盘价）
+        if not new_data and ticker_name:
+            print(f"  [FALLBACK2] 快照失败，尝试 push2his 东方财富日K")
+            new_data = fetch_push2his_daily(ticker_name)
     if not new_data:
-        print(f"  [WARN] {symbol} 无新数据（新浪+快照均失败）")
+        print(f"  [WARN] {symbol} 无新数据（新浪+快照+push2his均失败）")
         return 0
 
     new_df = pd.DataFrame(new_data).set_index("Date").sort_index()
