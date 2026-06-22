@@ -1,8 +1,9 @@
 {
   "name": "交易推荐质量",
   "description": "对 generate_trade_signals.py LLM 输出的多维质量评估标准",
-  "version": "1.0.0",
+  "version": "2.0.0",
   "created": "2026-06-21",
+  "updated": "2026-06-22",
   "aggregation": "weighted_sum_with_veto",
   "items": [
     {
@@ -27,21 +28,21 @@
     },
     {
       "id": "logic_completeness",
-      "description": "推荐理由覆盖四个必要维度：行业背景、财务/估值分析、技术面、风险提示",
-      "rationale": "单维度推荐说服力不足。但不同于事实性错误，维度缺失不一定是错的，只是不够完整",
+      "description": "推荐理由覆盖三个必要技术面维度：趋势判断依据、支撑/阻力位引用、仓位建议与风险匹配",
+      "rationale": "纯技术面分析应收敛于这三个维度。不含行业背景和基本面事件——这两项已从全链路删除",
       "weight": "medium",
       "judge": "llm",
-      "prompt": "检查以下交易推荐是否包含这四个维度：1)行业/板块背景 2)财务数据或估值分析 3)技术面或资金面 4)具体风险提示。每个维度0-1分。",
-      "pass_condition": "总分 >= 2.5",
+      "prompt": "检查以下交易推荐是否覆盖这三个技术面维度：1)趋势判断有技术指标依据（如均线排列、RSI读数）2)支撑位/阻力位数值被引用并参与推理 3)仓位建议与趋势方向合理匹配。每维度0-1分。",
+      "pass_condition": "总分 >= 2.0",
       "fail_action": "mark_low_confidence"
     },
     {
       "id": "risk_specificity",
-      "description": "风险提示包含至少一个具体风险（如'原材料成本上升'），而非笼统措辞（如'注意风险'）",
-      "rationale": "笼统风险提示没有信息量，是 LLM 偷懒的常见模式",
+      "description": "理由中包含至少一个技术面风险推演（如均线死叉、高点阻力、RSI超买超卖、波动率偏离）",
+      "rationale": "纯技术面分析的风险应来自技术指标形态推演，不是基本面事件",
       "weight": "medium",
       "judge": "llm",
-      "prompt": "判断风险提示部分是否包含至少一个具体、可指认的风险因素（如行业政策变化、原材料价格波动、竞争格局恶化等），而非笼统表述。是/否。",
+      "prompt": "判断推荐理由中是否包含至少一个基于技术指标形态的风险推演（如均线死叉、关键阻力/支撑突破、RSI极限区域、波动率异常等），而非笼统表述或基本面事件。是/否。",
       "pass_condition": "返回'是'",
       "fail_action": "mark_low_confidence"
     },
