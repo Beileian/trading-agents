@@ -21,15 +21,15 @@ import requests
 
 # ── Config ──────────────────────────────────────────────
 CACHE_DIR = "/root/.openclaw/workspace/projects/trading-agents/logs/cache"
-REPORT_PATH = "/root/.openclaw/workspace/projects/trading-agents/reports/trading_analysis_20260618.md"
-OPINIONS_PATH = "/root/.openclaw/workspace/projects/trading-agents/reports/opinions_20260618.md"
+REPORT_PATH = "/root/.openclaw/workspace/projects/trading-agents/reports/trading_analysis_20260622.md"
+OPINIONS_PATH = "/root/.openclaw/workspace/projects/trading-agents/reports/opinions_20260622.md"
 DEEPSEEK_KEY = "sk-2fe07fda653b47c6997a51ea0fe842a0"
 DEEPSEEK_URL = "https://api.deepseek.com/chat/completions"
 DEEPSEEK_MODEL = "deepseek-chat"
 
 SYMBOLS = symbols_config.SYMBOLS
 
-TODAY_STR = "2026-06-18"
+TODAY_STR = "2026-06-22"
 
 # ── Helpers ──────────────────────────────────────────────
 
@@ -167,7 +167,11 @@ def compute_metrics(rows, symbol, stype):
 
 def build_prompt(symbol, name, stype, metrics, extra):
     """Build DeepSeek prompt for one symbol."""
-    sys_prompt = "你是一位专业的A股技术分析师和交易决策顾问。请根据以下技术指标给出简洁分析。"
+    sys_prompt = """你是一位专业的A股技术分析师和交易决策顾问。请根据以下技术指标给出简洁分析。
+
+行业背景要求：结合标的所属行业，一句话说明当前该行业的核心驱动或压力（如政策变化、利率环境、资金风格偏好）。如果是宽基指数，说明当前市场风格的宏观逻辑。
+
+具体风险要求：基于技术指标形态（如均线死叉、高点阻力、RSI超买/超卖、波动率偏离）推演一个近期可能发生的技术面风险场景。禁止引用任何基本面事件日期（解禁日、财报日、政策会议日期等）——你无法确定当前的真实日期，引用历史日期会产生幻觉。只做纯技术面推演。"""
 
     # Price vs MAs
     price = extra["last_close"]
@@ -194,7 +198,7 @@ def build_prompt(symbol, name, stype, metrics, extra):
 **距年内低点**: {metrics['距年内低点']}
 
 请用JSON格式回复，不要包含任何其他内容：
-{{"趋势": "看涨/看跌/震荡", "支撑位": "价格", "阻力位": "价格", "建议": "买入/卖出/持有", "仓位": 数字百分比(0-100), "理由": "≤100字简要理由"}}"""
+{{"趋势": "看涨/看跌/震荡", "支撑位": "价格", "阻力位": "价格", "建议": "买入/卖出/持有", "仓位": 数字百分比(0-100), "行业背景": "≤60字当前行业核心逻辑", "具体风险": "≤60字可指认的风险事件", "理由": "≤100字简要理由"}}"""
 
     return sys_prompt, user_prompt
 
@@ -364,7 +368,7 @@ def main():
     header = f"""# 📊 A股技术分析与交易决策报告
 
 **生成日期**: {TODAY_STR}
-**数据范围**: 2021-06-04 至 2026-06-18（约5年日线）
+**数据范围**: 2021-06-04 至 2026-06-22（约5年日线）
 **分析标的**: 7只（3指数 + 4个股）
 **分析模型**: DeepSeek-chat
 
@@ -423,6 +427,8 @@ def main():
 | **阻力位** | {decision.get('阻力位', 'N/A')} |
 | **交易建议** | **{decision.get('建议', 'N/A')}** |
 | **建议仓位** | {decision.get('仓位', 'N/A')}% |
+| **行业背景** | {decision.get('行业背景', 'N/A')} |
+| **具体风险** | {decision.get('具体风险', 'N/A')} |
 | **简要理由** | {decision.get('理由', 'N/A')} |
 
 ---
