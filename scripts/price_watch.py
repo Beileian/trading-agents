@@ -364,13 +364,28 @@ def push_alerts(alerts):
     if not alerts:
         return
 
-    lines = ["⚡ 盘中价格预警"]
+    now = datetime.now(TZ)
+    hour = now.hour
+    if hour >= 14:
+        title = "⚡ 尾盘监测"
+        header = "⚡ 尾盘监测"
+    elif hour >= 13:
+        title = "⚡ 午后监测"
+        header = "⚡ 午后监测"
+    elif hour >= 10:
+        title = "⚡ 盘中价格预警"
+        header = "⚡ 盘中价格预警"
+    else:
+        title = "⚡ 早盘价格预警"
+        header = "⚡ 早盘价格预警"
+
+    lines = [header]
     for a in alerts:
         lines.append(f"- {a['msg']}")
     text = '\n'.join(lines)
 
     try:
-        send_markdown(text, title="⚡ 盘中价格预警")
+        send_markdown(text, title=title)
         print(f"[price_watch] 预警已推送: {len(alerts)} 条")
     except Exception as e:
         print(f"[price_watch] 推送异常: {e}")
