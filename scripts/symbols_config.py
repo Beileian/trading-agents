@@ -111,6 +111,20 @@ TICKER_EM_MAP = {
     "562500.SH": "1.562500",
 }
 
+# 腾讯财经 HTTP 代码: ticker → qt.gtimg.cn 代码
+TICKER_TC_MAP = {
+    "000016.SH": "sh000016",
+    "000300.SH": "sh000300",
+    "000688.SH": "sh000688",
+    "601288.SH": "sh601288",
+    "601988.SH": "sh601988",
+    "600036.SH": "sh600036",
+    "600795.SH": "sh600795",
+    "000066.SZ": "sz000066",
+    "600562.SH": "sh600562",
+    "562500.SH": "sh562500",
+}
+
 # 启动时校验一致性
 _derived = derive_sina_map()
 for ticker, expected in TICKER_SINA_MAP.items():

@@ -1,9 +1,16 @@
 #!/usr/bin/env python3
 """
 A股日线缓存更新脚本 — 拉取最新交易数据追加到本地 CSV
-v1.2: 新浪主源 → 腾讯兜底 → push2his 第三兜底（多源交叉保障）
+v1.3: 新浪主源 → 腾讯日K → 收盘快照 → push2his → push2(VPS)
 
-数据源: 新浪财经 K线（主）→ 腾讯日K线（兜底1）→ 东方财富 push2his 日K线（兜底2）
+数据源链（五层降级）:
+  主源:  新浪财经 K线 (money.finance.sina.com.cn)
+  兜底1: 腾讯财经日K (web.ifzq.gtimg.cn) — 无Key, OHLCV全字段
+  兜底2: 收盘快照 (closing_review.py 写入的 close_snapshot*.json)
+  兜底3: 东方财富 push2his 日K (直连可用)
+  兜底4: 东方财富 push2 via VPS跳板机 (完整实时行情)
+
+相关文档: projects/stock_monitor/docs/DATA_SOURCES.md
 用法: python3 update_daily_cache.py
 """
 
@@ -150,6 +157,51 @@ def fetch_push2_via_vps(ticker: str) -> list[dict]:
         return []
 
 
+def fetch_tencent_daily(ticker: str) -> list[dict]:
+    """从腾讯财经 HTTP 获取日K线数据
+    
+    腾讯日K线 API: web.ifzq.gtimg.cn，无需Key，响应快。
+    复权方式 qfq（前复权），取最近3根K线。
+    closing_review.py 和 generate_trade_signals.py 已大量使用 qt.gtimg.cn 实时行情。
+    """
+    import symbols_config
+    tc_code = symbols_config.TICKER_TC_MAP.get(ticker)
+    if not tc_code:
+        return []
+    
+    url = f"http://web.ifzq.gtimg.cn/appstock/app/fqkline/get?param={tc_code},day,,,3,qfq"
+    
+    try:
+        req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"})
+        resp = urllib.request.urlopen(req, timeout=10)
+        data = json.loads(resp.read())
+        
+        klines = data.get('data', {}).get(tc_code, {})
+        day_list = klines.get('day', []) or klines.get('qfqday', [])
+        if not day_list:
+            return []
+        
+        records = []
+        for row in day_list:
+            if len(row) < 6:
+                continue
+            try:
+                records.append({
+                    "Date": pd.to_datetime(row[0]),
+                    "Open": float(row[1]),
+                    "Close": float(row[2]),
+                    "High": float(row[3]),
+                    "Low": float(row[4]),
+                    "Volume": float(row[5]),
+                })
+            except (ValueError, IndexError):
+                continue
+        return records
+    except Exception as e:
+        print(f"  [WARN] {ticker} 腾讯日K 失败: {e}")
+        return []
+
+
 def find_cache_path(cache_key: str) -> str | None:
     """根据 TICKER 映射找到实际缓存文件"""
     # 直接匹配
@@ -194,44 +246,47 @@ def update_cache(cache_file: str, symbol: str) -> int:
     # 从新浪获取最新数据
     new_data = fetch_sina_daily(symbol)
     if not new_data:
-        # 新浪失败 → 收盘快照兜底（closing_review.py 前一天收盘写入）
+        # 新浪失败 → 确定 ticker_name
         ticker_name = None
         for csv_key, sina_sym in TICKERS.items():
             if sina_sym == symbol:
                 ticker_name = csv_key
                 break
-        if ticker_name:
-            name_map = {"000016.SH": "上证50", "000300.SH": "沪深300", "000688.SH": "科创50",
-                        "601288.SH": "农业银行", "601988.SH": "中国银行", "600036.SH": "招商银行",
-                        "600795.SH": "国电电力", "000066.SZ": "中国长城", "600562.SH": "国睿科技"}
-            cn_name = name_map.get(ticker_name)
-            if cn_name:
-                yesterday = (datetime.now(TZ) - timedelta(days=1)).strftime("%Y%m%d")
-                snapshot_file = f"{os.path.dirname(CACHE_DIR)}/reports/close_snapshot_{yesterday}.json"
-                if os.path.exists(snapshot_file):
-                    with open(snapshot_file) as f:
-                        snap = json.load(f)
-                    if cn_name in snap:
-                        print(f"  [FALLBACK] 新浪失败，从收盘快照追加 {cn_name}={snap[cn_name]}")
-                        today_date = datetime.now(TZ).date()
-                        new_data = [{
-                            "Date": pd.to_datetime(today_date),
-                            "Open": snap[cn_name],
-                            "High": snap[cn_name],
-                            "Low": snap[cn_name],
-                            "Close": snap[cn_name],
-                            "Volume": 0,
-                        }]
-        # 快照也失败 → push2his 兜底（东方财富日K，含当天动态收盘价）
+        # 腾讯成功 → 跳过快照
+        if not new_data:
+            # 二级兜底: 收盘快照（仅收盘价，closing_review.py 写入）
+            if ticker_name:
+                name_map = {"000016.SH": "上证50", "000300.SH": "沪深300", "000688.SH": "科创50",
+                            "601288.SH": "农业银行", "601988.SH": "中国银行", "600036.SH": "招商银行",
+                            "600795.SH": "国电电力", "000066.SZ": "中国长城", "600562.SH": "国睿科技"}
+                cn_name = name_map.get(ticker_name)
+                if cn_name:
+                    yesterday = (datetime.now(TZ) - timedelta(days=1)).strftime("%Y%m%d")
+                    snapshot_file = f"{os.path.dirname(CACHE_DIR)}/reports/close_snapshot_{yesterday}.json"
+                    if os.path.exists(snapshot_file):
+                        with open(snapshot_file) as f:
+                            snap = json.load(f)
+                        if cn_name in snap:
+                            print(f"  [FALLBACK2] 腾讯失败，从收盘快照追加 {cn_name}={snap[cn_name]}")
+                            today_date = datetime.now(TZ).date()
+                            new_data = [{
+                                "Date": pd.to_datetime(today_date),
+                                "Open": snap[cn_name],
+                                "High": snap[cn_name],
+                                "Low": snap[cn_name],
+                                "Close": snap[cn_name],
+                                "Volume": 0,
+                            }]
+        # 三级兜底: push2his 东方财富日K（直连可用）
         if not new_data and ticker_name:
-            print(f"  [FALLBACK2] 快照失败，尝试 push2his 东方财富日K")
+            print(f"  [FALLBACK3] 快照失败，尝试 push2his 东方财富日K")
             new_data = fetch_push2his_daily(ticker_name)
-        # push2his 也失败 → push2 via VPS 跳板机（完整实时行情）
+        # 四级兜底: push2 via VPS 跳板机（完整实时行情）
         if not new_data and ticker_name:
-            print(f"  [FALLBACK3] push2his 失败，尝试 push2 via VPS 跳板机")
+            print(f"  [FALLBACK4] push2his 失败，尝试 push2 via VPS 跳板机")
             new_data = fetch_push2_via_vps(ticker_name)
     if not new_data:
-        print(f"  [WARN] {symbol} 无新数据（新浪+快照+push2his+VPS均失败）")
+        print(f"  [WARN] {symbol} 无新数据（新浪+腾讯+快照+push2his+VPS均失败）")
         return 0
 
     new_df = pd.DataFrame(new_data).set_index("Date").sort_index()
