@@ -959,15 +959,12 @@ def main():
         tech_trigger = adjust_trigger(advice, support, resistance, bias_val, bias_dir, calibration_hint)
         risk_desc, catalyst_desc = match_external_signals(symbol, overseas_text, opinions_text)
         reasoning = extract(section, '简要理由')
-        sector_bg = extract(section, '行业背景')
-        specific_risk = extract(section, '具体风险')
-
         records.append({
             'name': name, 'price': price, 'bias': bias_display,
             'support': support, 'resistance': resistance,
             'trend': trend, 'advice': advice, 'pos': pos,
             'trigger': tech_trigger, 'risk': risk_desc, 'catalyst': catalyst_desc,
-            'reasoning': reasoning, 'sector_bg': sector_bg, 'specific_risk': specific_risk,
+            'reasoning': reasoning,
         })
 
     # ── 实时开盘价覆盖（v2.4.0）──
@@ -1212,17 +1209,7 @@ def main():
         if r['catalyst']:
             lines.append(f"  催化：{r['catalyst']}")
 
-        # 行业背景（来自DeepSeek技术分析）
-        sector_bg = r.get('sector_bg', '')
-        if sector_bg and sector_bg != '-' and sector_bg != 'N/A':
-            lines.append(f"  行业：{sector_bg}")
-
-        # 具体风险（来自DeepSeek技术分析）
-        specific_risk = r.get('specific_risk', '')
-        if specific_risk and specific_risk != '-' and specific_risk != 'N/A':
-            lines.append(f"  风险：{specific_risk}")
-
-        # 推理摘要（来自DeepSeek技术分析，供rubric评估用）
+        # 推理摘要（来自DeepSeek技术分析）
         reasoning = r.get('reasoning', '')
         if reasoning and reasoning != '-':
             # 截断80字，保持推送简洁
