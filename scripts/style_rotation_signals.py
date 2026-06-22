@@ -846,17 +846,19 @@ def format_brief_for_push(temp: MarketTemperature) -> str:
     lines = []
     lines.append("**⑥ 市场温度计**")
     lines.append("")
+    # 表格格式 — 手机上更整齐
+    lines.append("| 指标 | 数值 | 分位 | 信号 | 备注 |")
+    lines.append("|------|------|------|------|------|")
     for s in temp.signals:
         sig_name = {'overheat':'过热','warm':'偏热','neutral':'中性','cold':'偏冷','oversold':'极冷'}.get(s.signal, s.signal)
         freshness_str = f" [{s.data_freshness}]" if s.data_freshness else ""
-        # 数据置信度低时标注
         conf_warn = ""
         if s.data_conf <= 1:
-            conf_warn = " ⚠️数据过期"
+            conf_warn = "⚠️过期"
         elif s.data_conf == 2:
-            conf_warn = " ℹ️数据滞后"
-        lines.append(f"{s.emoji()} {s.name}: {s.value}（{s.pct_rank:.0f}%分位, {sig_name}）{conf_warn}{freshness_str}")
-        lines.append(f"  → {s.note}")
+            conf_warn = "ℹ️滞后"
+        note = s.note[:40] + "…" if len(s.note) > 40 else s.note
+        lines.append(f"| {s.emoji()} {s.name} | {s.value} | {s.pct_rank:.0f}% | {sig_name} | {note}{conf_warn}{freshness_str} |")
     lines.append("")
     if temp.decision:
         lines.append(f"📋 {temp.decision}")

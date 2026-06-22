@@ -1280,12 +1280,16 @@ def build_report(prices, thresholds, overseas_dir, overseas_conf):
         sres_str = f"支{sup}/阻{res}" if sup and res else ""
         if sres_str and vwap_tag:
             sres_str += f" {vwap_tag}"
-        # P5: 仓位
-        pos_str = t.get("pos", "")
-        if not pos_str or pos_str == 0:
-            pos_str = ""
+        # 仓位: 0%也显示，不设为空
+        pos_raw = t.get("pos", "")
+        if pos_raw != "" and pos_raw is not None:
+            try:
+                pos_val = int(float(str(pos_raw).replace('%', '')))
+                pos_str = f"{pos_val}%"
+            except (ValueError, TypeError):
+                pos_str = ""
         else:
-            pos_str = f"{int(float(str(pos_str).replace('%','')))}%"
+            pos_str = ""
         mismatch_lines.append(f"| {emoji} {name} | {rec_dir} | {act_dir} | {reason} | {pos_str} |")
 
     L.append("| 标的 | 推荐 | 实际 | 偏差 | 仓位 |")
@@ -1300,8 +1304,9 @@ def build_report(prices, thresholds, overseas_dir, overseas_conf):
     L.append("**⑤ 价格穿越**")
     breaches = check_breaches(prices, thresholds)
     if breaches:
-        b_parts = [b['summary'] for b in breaches]
-        L.append(f"{len(breaches)} 条 — {'；'.join(b_parts)}")
+        L.append(f"{len(breaches)} 条触发：")
+        for b in breaches:
+            L.append(f"- {b['summary']}")
     else:
         L.append("无")
     L.append("")
