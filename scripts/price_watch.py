@@ -105,46 +105,105 @@ def load_thresholds():
     return thresholds
 
 def fetch_sina_prices():
-    """从新浪财经获取实时价格（免费，无限额）"""
+    """从多数据源获取实时价格。指数用东方财富（字段明确），个股用新浪（免费无限额）。"""
     prices = {}
     sina_codes = list(SINA_MAP.keys())
-    
+
+    # ── 批量取东方财富实时行情（用于指数+个股双校验） ──
+    east_codes = []
+    for sc in sina_codes:
+        code, name = SINA_MAP[sc]
+        # 东方财富市场标记: 沪市=1, 深市=0, 指数=1
+        if sc.startswith('sh'):
+            east_codes.append(f'1.{code.replace(".SH","")}' if '.SH' in code else f'1.{code}')
+        elif sc.startswith('sz'):
+            east_codes.append(f'0.{code.replace(".SZ","")}')
+        else:
+            east_codes.append('')  # 非统一代码
+
+    # 东方财富批量查询（一次取所有）
+    east_prices = {}
+    try:
+        east_batch = ','.join(east_codes)
+        url = f'https://push2.eastmoney.com/api/qt/stock/get?secid={east_batch}&fields=f43,f44,f45,f46,f47,f57,f58,f60,f169,f170'
+        resp = requests.get(url, timeout=5)
+        # 批量模式可能失败，逐个尝试
+        for ec in east_codes:
+            if not ec:
+                continue
+            try:
+                url2 = f'https://push2.eastmoney.com/api/qt/stock/get?secid={ec}&fields=f43,f44,f45,f46,f47,f57,f58,f60,f169,f170'
+                r = requests.get(url2, timeout=3)
+                d = r.json()
+                if d.get('data'):
+                    dd = d['data']
+                    east_prices[dd['f57']] = {
+                        'price': dd['f43'] / 100 if dd.get('f43') else None,
+                        'high': dd['f44'] / 100 if dd.get('f44') else None,
+                        'low': dd['f45'] / 100 if dd.get('f45') else None,
+                        'open': dd['f46'] / 100 if dd.get('f46') else None,
+                        'prev_close': dd['f60'] / 100 if dd.get('f60') else None,
+                        'volume': dd.get('f47', 0),
+                        'change_pct': dd.get('f170', 0) / 100 if dd.get('f170') else None,
+                    }
+            except Exception:
+                continue
+    except Exception as e:
+        print(f"[eastmoney error] {e}", file=sys.stderr)
+
+    # ── 新浪个股数据 ──
     for i in range(0, len(sina_codes), 3):
         batch = sina_codes[i:i+3]
         url = "http://hq.sinajs.cn/list=" + ",".join(batch)
         try:
             resp = requests.get(url, headers={"Referer": "https://finance.sina.com.cn"}, timeout=5)
             resp.encoding = "gbk"
-            
+
             for line in resp.text.strip().split("\n"):
                 match = re.search(r'hq_str_(\w+)="(.+)"', line)
                 if not match:
                     continue
                 sina_code = match.group(1)
                 fields = match.group(2).split(",")
-                
+
                 if sina_code not in SINA_MAP or len(fields) < 6:
                     continue
-                
+
                 code, name = SINA_MAP[sina_code]
-                
-                if sina_code.startswith("sh0") or sina_code.startswith("sz3"):  # 指数
-                    price = float(fields[1])
+                is_index = sina_code.startswith("sh0") or sina_code.startswith("sz3")
+
+                # 获取东方财富数据（如果可用）
+                east_code = code.split('.')[-1] if '.' in code else code
+                east_data = east_prices.get(east_code, {})
+
+                if is_index and east_data.get('price') is not None:
+                    # 指数优先用东方财富（字段明确，f43=最新价）
+                    price = east_data['price']
+                    prev_close = east_data['prev_close']
+                    high = east_data['high']
+                    low = east_data['low']
+                    open_price = east_data['open']
+                    change_pct = east_data['change_pct']
+                    volume = east_data['volume']
+                elif is_index:
+                    # 东方财富不可用，新浪fallback: fields[1]=今开, fields[2]=昨收
+                    open_price = float(fields[1])
                     prev_close = float(fields[2])
-                    high = float(fields[4])
-                    low = float(fields[5])
-                else:  # 个股
+                    price = open_price  # ⚠️ 新浪指数无实时价，仅标记
+                    high = float(fields[4]) if fields[4] else open_price
+                    low = float(fields[5]) if fields[5] else open_price
+                    change_pct = (price - prev_close) / prev_close * 100 if prev_close else 0
+                    volume = float(fields[8]) if fields[8] else 0
+                else:
+                    # 个股用新浪（fields[3]=当前价确认正确）
                     price = float(fields[3]) if fields[3] != '0.000' else float(fields[1])
                     prev_close = float(fields[2])
                     high = float(fields[4])
                     low = float(fields[5])
-                
-                change_pct = (price - prev_close) / prev_close * 100 if prev_close != 0 else 0
-                
-                # 取开盘价和成交量（通達信异动检测所需）
-                open_price = float(fields[1]) if len(fields) > 1 and fields[1] else price
-                volume = float(fields[8]) if len(fields) > 8 and fields[8] else 0
-                
+                    change_pct = (price - prev_close) / prev_close * 100 if prev_close != 0 else 0
+                    open_price = float(fields[1]) if len(fields) > 1 and fields[1] else price
+                    volume = float(fields[8]) if len(fields) > 8 and fields[8] else 0
+
                 prices[name] = {
                     'price': price,
                     'change_pct': round(change_pct, 2),
@@ -156,7 +215,7 @@ def fetch_sina_prices():
                 }
         except Exception as e:
             print(f"[sina batch error] {batch}: {e}", file=sys.stderr)
-    
+
     return prices
 
 def fetch_zhitu_prices():
