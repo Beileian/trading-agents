@@ -1196,6 +1196,10 @@ def build_report(prices, thresholds, overseas_dir, overseas_conf):
         L.append("**② 外盘验证**")
         L.append(f"预判 {overseas_dir}（{overseas_conf or '?'}）→ 实际 {actual_dir}，{dir_match}（三大指数均 {avg_idx_chg:+.2f}%）")
         L.append("")
+    else:
+        L.append("**② 外盘验证**")
+        L.append("今日外盘信号未生成（可能数据源异常或非交易日），跳过方向验证")
+        L.append("")
     
     # ═══ 3. 极端波动 & 波动率体制切换 ═══
     extreme = [f"{name} {p['chg_pct']:+.2f}%" for name, p in prices.items() if abs(p["chg_pct"]) >= 3]

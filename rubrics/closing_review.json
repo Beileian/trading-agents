@@ -1,0 +1,59 @@
+{
+  "name": "收盘复盘质量",
+  "description": "对 closing_review.py 输出的收盘复盘报告的多维质量评估标准",
+  "version": "1.0.0",
+  "created": "2026-06-23",
+  "aggregation": "normalized_weighted_average",
+  "score_range": "0-10",
+  "items": [
+    {
+      "id": "data_completeness",
+      "description": "八个必需章节完整覆盖：①指数②外盘验证③极端波动④方向对比⑤价格穿越⑥温度计⑦本周认知⑧虚拟盘",
+      "rationale": "缺章漏节会导致复盘不连贯，尤其是②外盘验证和⑧虚拟盘",
+      "weight": "high",
+      "judge": "script",
+      "script": "rubrics/check_closing_sections.py",
+      "pass_condition": "8章节中至少7个存在",
+      "fail_action": "mark_low_confidence",
+      "normalized_score_rule": "每个缺失章节扣1.5分，最多扣到0"
+    },
+    {
+      "id": "data_accuracy",
+      "description": "指数涨跌幅、个股收盘价、穿越触发数量与原始数据一致",
+      "rationale": "复盘的底线是数据不能错——今天上证50报错价格已经验证了这个必要性",
+      "weight": "veto",
+      "judge": "script",
+      "script": "rubrics/check_closing_accuracy.py",
+      "pass_condition": "所有引用数字与3路交叉验证数据偏差 < 2%",
+      "fail_action": "reject_and_retry",
+      "normalized_score_rule": "全通过=10, 1个错误=3, >=2个错误=0"
+    },
+    {
+      "id": "insight_depth",
+      "description": "今日一句话和本周认知部分包含趋势推演而非简单罗列数据",
+      "rationale": "复盘不应该是数据的搬运工，应该有认知增量",
+      "weight": "medium",
+      "judge": "llm",
+      "prompt": "请以0-10分评分以下复盘报告：「今日一句话」和「本周认知」是否包含对市场趋势的推演性判断（如趋势确认、转折预警、体制切换），而非简单罗列涨跌数据。\n\n0-3分：纯数据罗列\n4-6分：有判断但停留表面\n7-8分：有1-2个有洞见的推演\n9-10分：推演有逻辑链支撑\n\n输出格式：仅输出一个数字。",
+      "pass_condition": "分数 >= 6",
+      "fail_action": "mark_low_confidence",
+      "normalized_score_rule": "LLM直接输出0-10分"
+    },
+    {
+      "id": "consistency_with_morning",
+      "description": "收盘复盘中的穿越触发、卖出偏离等结论是否与当日开盘推荐的支撑/阻力位一致",
+      "rationale": "开盘推荐定了支撑阻力位，收盘复盘用了同样的阈值算穿越，必须一致",
+      "weight": "high",
+      "judge": "script",
+      "script": "rubrics/check_morning_consistency.py",
+      "pass_condition": "穿越标的的支撑/阻力阈值与 trade_signals 文件一致",
+      "fail_action": "mark_low_confidence",
+      "normalized_score_rule": "全一致=10, 1个不匹配=5, >=2个=0"
+    }
+  ],
+  "thresholds": {
+    "low_confidence": "任一 high 项得分 < 6 或总分 < 6.0",
+    "reject": "data_accuracy 得分 = 0 或章节缺失 >= 3 个"
+  },
+  "log": "rubrics/rubric_log.jsonl"
+}

@@ -32,6 +32,26 @@ REVIEW_FILE="$REPORT_DIR/closing_review_${DATE_TAG}.md"
 PAPER_STATE="$REPORT_DIR/paper_state.json"
 
 if [ -f "$REVIEW_FILE" ] && [ -s "$REVIEW_FILE" ]; then
+    # 步骤3.5: Rubrics 质量评估
+    CLOSING_RUBRIC="$PROJECT_DIR/rubrics/closing_review.json"
+    CLOSING_RUBRIC_SCRIPT="$PROJECT_DIR/rubrics/run_rubrics.py"
+    if [ -f "$CLOSING_RUBRIC" ] && [ -f "$CLOSING_RUBRIC_SCRIPT" ]; then
+        echo "[3.5/3] Rubrics质量评估..."
+        # 临时切换rubric文件为closing标准
+        cp "$PROJECT_DIR/rubrics/trade_recommendation.json" /tmp/trade_backup.json 2>/dev/null || true
+        cp "$CLOSING_RUBRIC" "$PROJECT_DIR/rubrics/trade_recommendation.json"
+        /usr/bin/python3 "$CLOSING_RUBRIC_SCRIPT" "$REVIEW_FILE" 2>&1 || {
+            RUBRIC_EXIT=$?
+            if [ $RUBRIC_EXIT -eq 2 ]; then
+                echo "[RUBRIC] 复盘质量 REJECT — 标记但继续推送（复盘不阻断）"
+            elif [ $RUBRIC_EXIT -eq 1 ]; then
+                echo "[RUBRIC] 复盘质量 LOW_CONFIDENCE — 标记但继续推送"
+            fi
+        }
+        # 恢复
+        cp /tmp/trade_backup.json "$PROJECT_DIR/rubrics/trade_recommendation.json" 2>/dev/null || true
+    fi
+    
     echo "[3/3] 复盘报告推送中..."
     cat "$REVIEW_FILE" | python3 "$PUSH_SCRIPT"
 else
