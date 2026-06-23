@@ -88,6 +88,7 @@ def run_script(script_path: str, args: list[str]) -> dict:
             result = {"raw": proc.stdout.strip()}
         return {
             "pass": proc.returncode == 0,
+            "score": 10 if proc.returncode == 0 else 0,
             "result": result,
             "exit_code": proc.returncode,
             "stderr": proc.stderr.strip(),
@@ -129,80 +130,84 @@ def evaluate_llm_item(item: dict, report_text: str, analysis_text: str = "") -> 
         prompt = prompt[:8000] + "\n\n[...报告过长已截断...]"
 
     try:
-        llm_output = call_llm(prompt, max_tokens=1536)
+        llm_output = call_llm(prompt, max_tokens=2048)
     except Exception as e:
         return {"pass": False, "llm_output": None, "error": str(e)}
 
-    # 判断通过条件
+    # 判断通过条件 — v3.0 统一使用0-10分
     cond = item["pass_condition"]
-    if ">= 2.5" in cond or ">=" in cond:
+    if ">=" in cond:
+        threshold = float(re.search(r'[\d.]+', cond).group())
         try:
             score = float(re.search(r'[\d.]+', llm_output).group())
-            passed = score >= 2.5
+            passed = score >= threshold
         except (ValueError, AttributeError):
+            score = 0
             passed = False
     elif "是" in cond:
         passed = "是" in llm_output and "否" not in llm_output[:50]
+        score = 10 if passed else 0
+    elif "exit code" in cond:
+        passed = res.get("pass", False)  # script类，pass已在调用处设置
+        score = 10 if passed else 0
     else:
         passed = cond in llm_output
+        score = 10 if passed else 0
 
-    return {"pass": passed, "llm_output": llm_output}
+    return {"pass": passed, "score": score, "llm_output": llm_output}
 
 
 def aggregate(rubric: dict, results: list[dict]) -> dict:
-    """加权求和 + veto"""
+    """v3.0: 归一化加权平均 (0-10分) + veto"""
     thresholds = rubric["thresholds"]
     items = rubric["items"]
 
-    # 解析每个item的结果
+    # 解析每个item的结果 - v3.0每项含score字段
     item_results = {}
     for item, res in zip(items, results):
         item_results[item["id"]] = {
             "weight": item["weight"],
             "pass": res.get("pass", False),
+            "score": res.get("score", 0),
             "fail_action": item["fail_action"],
             "detail": res,
         }
 
-    # Veto check
-    veto_triggered = []
-    for iid, ir in item_results.items():
-        if ir["weight"] == "veto" and not ir["pass"]:
-            veto_triggered.append(iid)
+    # Veto: schema未通过 → reject
+    if "schema_validity" in item_results and not item_results["schema_validity"]["pass"]:
+        return {"verdict": "reject", "reason": "veto: schema校验失败", "item_results": item_results}
 
-    # action_consistency 不通过 → reject
-    if not item_results.get("action_consistency", {}).get("pass", True):
-        veto_triggered.append("action_consistency")
+    # action_consistency < 7 → reject
+    ac = item_results.get("action_consistency", {})
+    if ac.get("score", 10) < 7:
+        return {"verdict": "reject", "reason": "veto: 方向一致性得分 < 7", "item_results": item_results}
 
-    if veto_triggered:
-        return {"verdict": "reject", "reason": f"veto触发: {veto_triggered}", "item_results": item_results}
-
-    # 加权分数
-    weight_map = {"high": 0.3, "medium": 0.2}
+    # 加权平均分 (0-10)
+    weight_map = {"veto": 0.25, "high": 0.25, "medium": 0.15}
     total_weight = sum(weight_map.get(ir["weight"], 0) for ir in item_results.values())
     total_score = sum(
-        weight_map.get(ir["weight"], 0) * (1.0 if ir["pass"] else 0.0)
+        weight_map.get(ir["weight"], 0) * ir["score"]
         for ir in item_results.values()
     )
-    final_score = total_score / total_weight if total_weight > 0 else 0
+    final_score = round(total_score / total_weight, 1) if total_weight > 0 else 0
 
     # 判断 low_confidence
     high_failed = any(
-        ir["weight"] == "high" and not ir["pass"]
+        ir["weight"] == "high" and ir["score"] < 6
         for ir in item_results.values()
     )
 
-    if high_failed or final_score < 0.6:
+    if high_failed or final_score < 6.0:
         return {
             "verdict": "low_confidence",
-            "score": round(final_score, 3),
+            "score": final_score,
             "high_failed": high_failed,
             "item_results": item_results,
         }
 
     return {
         "verdict": "pass",
-        "score": round(final_score, 3),
+        "score": final_score,
         "item_results": item_results,
     }
 
