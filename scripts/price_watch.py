@@ -11,6 +11,7 @@ v1: 基础版（subprocess/print/announce 三版迭代）
 
 import os, json, re, subprocess, requests, sys
 from datetime import datetime, timezone, timedelta
+from price_fetcher import PriceFetcher
 
 TZ = timezone(timedelta(hours=8))
 PROJECT_DIR = "/root/.openclaw/workspace/projects/trading-agents"
@@ -463,11 +464,29 @@ def main():
     if not thresholds:
         return
 
-    # 主数据源：新浪
-    prices = fetch_sina_prices()
-    if not prices:
+    # 主数据源：多源交叉验证（price_fetcher）
+    pf = PriceFetcher()
+    price_points = pf.fetch_all()
+    if not price_points:
         # 备用：智兔
         prices = fetch_zhitu_prices()
+    else:
+        # 转换 PricePoint → 旧prices格式（兼容check_breaches）
+        prices = {}
+        for name, pp in price_points.items():
+            if pp.quality == "stale" or pp.price == 0:
+                continue
+            prices[name] = {
+                'price': pp.price,
+                'change_pct': pp.change_pct,
+                'high': pp.high,
+                'low': pp.low,
+                'prev_close': pp.prev_close,
+                'open': pp.open,
+                'volume': 0,
+            }
+        if not prices:
+            prices = fetch_zhitu_prices()
     if not prices:
         return
 
