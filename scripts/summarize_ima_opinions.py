@@ -5,9 +5,24 @@
 """
 import sys, json, subprocess, os
 
-DEEPSEEK_KEY = "sk-2fe07fda653b47c6997a51ea0fe842a0"
+def _load_deepseek_key():
+    import os as _os
+    key = _os.environ.get("DEEPSEEK_API_KEY", "")
+    if key:
+        return key
+    env_file = "/root/.openclaw/workspace/projects/trading-agents/.env"
+    if _os.path.exists(env_file):
+        with open(env_file) as f:
+            for line in f:
+                if line.startswith("DEEPSEEK_API_KEY="):
+                    key = line.split("=", 1)[1].strip().strip('"').strip("'")
+                    if key:
+                        return key
+    return ""
+
+DEEPSEEK_KEY = _load_deepseek_key()
 DEEPSEEK_URL = "https://api.deepseek.com/chat/completions"
-MODEL = "deepseek-chat"
+MODEL = "deepseek-v4-pro"
 
 import re
 

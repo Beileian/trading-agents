@@ -33,7 +33,7 @@ RUBRIC_FILE = os.path.join(RUBRICS_DIR, "trade_recommendation.json")
 LOG_FILE = os.path.join(RUBRICS_DIR, "rubric_log.jsonl")
 
 DEEPSEEK_URL = "https://api.deepseek.com/chat/completions"
-MODEL = "deepseek-chat"
+MODEL = "deepseek-v4-pro"
 
 
 def _get_deepseek_key():
@@ -49,7 +49,7 @@ def _get_deepseek_key():
                     key = line.split("=", 1)[1].strip().strip('"').strip("'")
                     if key:
                         return key
-    return "sk-2fe07fda653b47c6997a51ea0fe842a0"
+    return ""
 
 
 def call_llm(prompt: str, max_tokens: int = 200) -> str:

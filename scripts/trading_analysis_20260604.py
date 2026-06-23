@@ -23,9 +23,24 @@ import requests
 CACHE_DIR = "/root/.openclaw/workspace/projects/trading-agents/logs/cache"
 REPORT_PATH = "/root/.openclaw/workspace/projects/trading-agents/reports/trading_analysis_20260604.md"
 OPINIONS_PATH = "/root/.openclaw/workspace/projects/trading-agents/reports/opinions_20260604.md"
-DEEPSEEK_KEY = "sk-2fe07fda653b47c6997a51ea0fe842a0"
+def _load_deepseek_key():
+    import os as _os
+    key = _os.environ.get("DEEPSEEK_API_KEY", "")
+    if key:
+        return key
+    env_file = "/root/.openclaw/workspace/projects/trading-agents/.env"
+    if _os.path.exists(env_file):
+        with open(env_file) as f:
+            for line in f:
+                if line.startswith("DEEPSEEK_API_KEY="):
+                    key = line.split("=", 1)[1].strip().strip('"').strip("'")
+                    if key:
+                        return key
+    return ""
+
+DEEPSEEK_KEY = _load_deepseek_key()
 DEEPSEEK_URL = "https://api.deepseek.com/chat/completions"
-DEEPSEEK_MODEL = "deepseek-chat"
+DEEPSEEK_MODEL = "deepseek-v4-pro"
 
 SYMBOLS = symbols_config.SYMBOLS
 
@@ -217,7 +232,7 @@ def call_deepseek(system_prompt, user_prompt, max_retries=3):
             {"role": "user", "content": user_prompt},
         ],
         "temperature": 0.3,
-        "max_tokens": 300,
+        "max_tokens": 1024,
     }
 
     for attempt in range(max_retries):

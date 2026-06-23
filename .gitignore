@@ -15,3 +15,5 @@ logs/price_alerts_state.json
 
 # 备份目录
 scripts/archive.bak-*/
+.env
+.env

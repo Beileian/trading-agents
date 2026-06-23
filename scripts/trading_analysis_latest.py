@@ -21,15 +21,30 @@ import requests
 
 # ── Config ──────────────────────────────────────────────
 CACHE_DIR = "/root/.openclaw/workspace/projects/trading-agents/logs/cache"
-REPORT_PATH = "/root/.openclaw/workspace/projects/trading-agents/reports/trading_analysis_20260622.md"
-OPINIONS_PATH = "/root/.openclaw/workspace/projects/trading-agents/reports/opinions_20260622.md"
-DEEPSEEK_KEY = "sk-2fe07fda653b47c6997a51ea0fe842a0"
+REPORT_PATH = "/root/.openclaw/workspace/projects/trading-agents/reports/trading_analysis_20260623.md"
+OPINIONS_PATH = "/root/.openclaw/workspace/projects/trading-agents/reports/opinions_20260623.md"
+def _load_deepseek_key():
+    import os as _os
+    key = _os.environ.get("DEEPSEEK_API_KEY", "")
+    if key:
+        return key
+    env_file = "/root/.openclaw/workspace/projects/trading-agents/.env"
+    if _os.path.exists(env_file):
+        with open(env_file) as f:
+            for line in f:
+                if line.startswith("DEEPSEEK_API_KEY="):
+                    key = line.split("=", 1)[1].strip().strip('"').strip("'")
+                    if key:
+                        return key
+    return ""
+
+DEEPSEEK_KEY = _load_deepseek_key()
 DEEPSEEK_URL = "https://api.deepseek.com/chat/completions"
-DEEPSEEK_MODEL = "deepseek-chat"
+DEEPSEEK_MODEL = "deepseek-v4-pro"
 
 SYMBOLS = symbols_config.SYMBOLS
 
-TODAY_STR = "2026-06-22"
+TODAY_STR = "2026-06-23"
 
 # ── Helpers ──────────────────────────────────────────────
 
@@ -144,23 +159,7 @@ def compute_metrics(rows, symbol, stype):
     metrics["距年内高点"] = f"{dist_high:+.2f}%"
     metrics["距年内低点"] = f"{dist_low:+.2f}%"
 
-    # 成交量分析
-    volumes = [r["Volume"] for r in rows if r.get("Volume", 0) > 0]
-    if len(volumes) >= 5:
-        vol_5d = sum(volumes[-6:-1]) / 5 if len(volumes) >= 6 else sum(volumes[-5:]) / 5
-        last_vol = volumes[-1]
-        vol_ratio = last_vol / vol_5d if vol_5d > 0 else 1.0
-        metrics["量比(vs5日均)"] = f"{vol_ratio:.2f}"
-        # 涨跌停或无量情况 volume 可能为 0
-        if last_vol > 0:
-            last_vol_display = f"{last_vol/10000:.1f}万手" if last_vol >= 10000 else f"{last_vol:.0f}手"
-        else:
-            last_vol_display = "无数据"
-        metrics["今日成交量"] = last_vol_display
-    else:
-        vol_ratio = 1.0
-        last_vol = 0
-
+    # Additional info for AI context
     extra = {
         "last_close": last_close,
         "ma5": ma5,
@@ -175,15 +174,19 @@ def compute_metrics(rows, symbol, stype):
         "dist_low": dist_low,
         "year_high": year_high,
         "year_low": year_low,
-        "vol_ratio": vol_ratio,
-        "last_vol": last_vol,
+        "closes": closes,
+        "dates": dates,
     }
     return metrics, extra
 
 
-def build_prompt(symbol, name, stype, metrics, extra, benchmark_data=None):
+def build_prompt(symbol, name, stype, metrics, extra):
     """Build DeepSeek prompt for one symbol."""
-    sys_prompt = """你是一位专业的A股技术分析师和交易决策顾问。请根据以下技术指标给出简洁分析。只做纯技术面判断，不涉及行业背景和基本面事件。"""
+    sys_prompt = """你是一位专业的A股技术分析师和交易决策顾问。请根据以下技术指标给出简洁分析。
+
+行业背景要求：结合标的所属行业，一句话说明当前该行业的核心驱动或压力（如政策变化、利率环境、资金风格偏好）。如果是宽基指数，说明当前市场风格的宏观逻辑。
+
+具体风险要求：指出一个可指认的、影响该标的近期走势的具体风险事件或因素（如解禁高峰、政策细则未落地、成本端波动、竞争格局变化）。使用具体数字或时间窗口，不使用笼统措辞。"""
 
     # Price vs MAs
     price = extra["last_close"]
@@ -193,20 +196,6 @@ def build_prompt(symbol, name, stype, metrics, extra, benchmark_data=None):
             rel = "上方" if price > ma_val else "下方"
             ma_status.append(f"{ma_name}({ma_val:.2f}){rel}")
     ma_str = "、".join(ma_status)
-
-    # 相对强弱 vs 基准指数
-    rs_lines = []
-    if benchmark_data and symbol not in ("000016.SH", "000300.SH", "000688.SH"):
-        for bench_sym, binfo in benchmark_data.items():
-            try:
-                my_week = extra["week_change"]
-                b_week = binfo["extra"]["week_change"]
-                my_month = extra["month_change"]
-                b_month = binfo["extra"]["month_change"]
-                rs_lines.append(f"vs{binfo['name']}: 周{my_week - b_week:+.1f}% 月{my_month - b_month:+.1f}%")
-            except (KeyError, TypeError):
-                pass
-    rs_str = "\n".join(rs_lines) if rs_lines else "（指数无相对强弱对比）"
 
     user_prompt = f"""请分析以下A股标的并给出交易建议：
 
@@ -220,14 +209,11 @@ def build_prompt(symbol, name, stype, metrics, extra, benchmark_data=None):
 **年内涨跌**: {metrics['年内涨跌']}
 **年内最高**: {extra['year_high']:.2f}
 **年内最低**: {extra['year_low']:.2f}
-**量比(vs5日均)**: {metrics.get('量比(vs5日均)', 'N/A')}
-**成交量**: {metrics.get('今日成交量', 'N/A')}
-**相对强弱**: {rs_str}
 **距年内高点**: {metrics['距年内高点']}
 **距年内低点**: {metrics['距年内低点']}
 
 请用JSON格式回复，不要包含任何其他内容：
-{{"趋势": "看涨/看跌/震荡", "支撑位": "价格", "阻力位": "价格", "建议": "买入/卖出/持有", "仓位": 数字百分比(0-100), "理由": "≤100字技术面简要理由"}}"""
+{{"趋势": "看涨/看跌/震荡", "支撑位": "价格", "阻力位": "价格", "建议": "买入/卖出/持有", "仓位": 数字百分比(0-100), "行业背景": "≤60字当前行业核心逻辑", "具体风险": "≤60字可指认的风险事件", "理由": "≤100字简要理由"}}"""
 
     return sys_prompt, user_prompt
 
@@ -246,7 +232,7 @@ def call_deepseek(system_prompt, user_prompt, max_retries=3):
             {"role": "user", "content": user_prompt},
         ],
         "temperature": 0.3,
-        "max_tokens": 300,
+        "max_tokens": 1024,
     }
 
     for attempt in range(max_retries):
@@ -397,7 +383,7 @@ def main():
     header = f"""# 📊 A股技术分析与交易决策报告
 
 **生成日期**: {TODAY_STR}
-**数据范围**: 2021-06-04 至 2026-06-22（约5年日线）
+**数据范围**: 2021-06-04 至 2026-06-23（约5年日线）
 **分析标的**: 7只（3指数 + 4个股）
 **分析模型**: DeepSeek-chat
 
@@ -407,18 +393,6 @@ def main():
 
 """
     report_sections.append(header)
-
-    # 预加载三大指数数据用于相对强弱计算
-    benchmark_data = {}
-    for bench_sym in ["000016.SH", "000300.SH", "000688.SH"]:
-        bench_rows = load_csv(bench_sym)
-        if bench_rows:
-            bench_metrics, bench_extra = compute_metrics(bench_rows, bench_sym, "index")
-            benchmark_data[bench_sym] = {
-                "metrics": bench_metrics,
-                "extra": bench_extra,
-                "name": "上证50" if bench_sym == "000016.SH" else ("沪深300" if bench_sym == "000300.SH" else "科创50"),
-            }
 
     for symbol, name, stype in SYMBOLS:
         print(f"\n{'─' * 50}")
@@ -435,22 +409,8 @@ def main():
 
         # Call DeepSeek
         print(f"  调用 DeepSeek API...")
-        sys_prompt, user_prompt = build_prompt(symbol, name, stype, metrics, extra, benchmark_data)
+        sys_prompt, user_prompt = build_prompt(symbol, name, stype, metrics, extra)
         decision = call_deepseek(sys_prompt, user_prompt)
-
-        # 计算报告中的相对强弱展示
-        rs_lines = []
-        if benchmark_data and symbol not in ("000016.SH", "000300.SH", "000688.SH"):
-            for bench_sym, binfo in benchmark_data.items():
-                try:
-                    my_week = extra["week_change"]
-                    b_week = binfo["extra"]["week_change"]
-                    my_month = extra["month_change"]
-                    b_month = binfo["extra"]["month_change"]
-                    rs_lines.append(f"vs{binfo['name']}: 周{my_week - b_week:+.1f}% 月{my_month - b_month:+.1f}%")
-                except (KeyError, TypeError):
-                    pass
-        rs_report = "\n".join(rs_lines) if rs_lines else "（基准指数，无需对比）"
 
         if decision is None:
             # Fallback if API fails
@@ -482,10 +442,9 @@ def main():
 | **阻力位** | {decision.get('阻力位', 'N/A')} |
 | **交易建议** | **{decision.get('建议', 'N/A')}** |
 | **建议仓位** | {decision.get('仓位', 'N/A')}% |
+| **行业背景** | {decision.get('行业背景', 'N/A')} |
+| **具体风险** | {decision.get('具体风险', 'N/A')} |
 | **简要理由** | {decision.get('理由', 'N/A')} |
-
-**相对强弱**（周/月涨跌 vs 基准指数）：
-{rs_report}
 
 ---
 

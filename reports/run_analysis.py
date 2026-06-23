@@ -18,7 +18,22 @@ CACHE_DIR = Path("/root/.openclaw/workspace/projects/trading-agents/logs/cache")
 REPORT_PATH = Path("/root/.openclaw/workspace/projects/trading-agents/reports")
 REPORT_PATH.mkdir(parents=True, exist_ok=True)
 
-DEEPSEEK_API_KEY = "sk-2fe…42a0"  # placeholder — will read from env or direct
+def _load_deepseek_key():
+    import os as _os
+    key = _os.environ.get("DEEPSEEK_API_KEY", "")
+    if key:
+        return key
+    env_file = "/root/.openclaw/workspace/projects/trading-agents/.env"
+    if _os.path.exists(env_file):
+        with open(env_file) as f:
+            for line in f:
+                if line.startswith("DEEPSEEK_API_KEY="):
+                    key = line.split("=", 1)[1].strip().strip('"').strip("'")
+                    if key:
+                        return key
+    return ""
+
+DEEPSEEK_API_KEY = _load_deepseek_key()
 DEEPSEEK_URL = "https://api.deepseek.com/chat/completions"
 
 STOCKS = [
@@ -211,7 +226,7 @@ def call_deepseek(indicators, api_key):
 理由：（≤100字简要理由）"""
 
     data = {
-        "model": "deepseek-chat",
+        "model": "deepseek-v4-pro",
         "messages": [
             {"role": "system", "content": "你是一位专业A股技术分析师，严格基于提供的技术指标数据进行分析，不做主观臆断。输出简洁、精确。"},
             {"role": "user", "content": prompt},

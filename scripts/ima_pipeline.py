@@ -30,7 +30,7 @@ FOLDER_MAP = {
 
 DEEPSEEK_KEY = os.environ.get("DEEPSEEK_API_KEY", "")
 DEEPSEEK_URL = "https://api.deepseek.com/chat/completions"
-MODEL = "deepseek-chat"
+MODEL = "deepseek-v4-pro"
 
 # 衰减参数
 DECAY_BASE = 0.85
@@ -57,7 +57,7 @@ def _get_deepseek_key():
                     key = line.split("=", 1)[1].strip().strip('"').strip("'")
                     if key:
                         return key
-    return "sk-2fe07fda653b47c6997a51ea0fe842a0"  # 最后fallback
+    return ""
 
 
 def _date_weight(note_date):

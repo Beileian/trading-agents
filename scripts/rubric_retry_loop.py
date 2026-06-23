@@ -48,7 +48,7 @@ def _get_deepseek_key():
                     key = line.split("=", 1)[1].strip().strip('"').strip("'")
                     if key:
                         return key
-    return "sk-284…03e9"
+    return ""
 
 
 def run_rubrics(report_file: str, analysis_file: str = "") -> dict:
@@ -134,6 +134,7 @@ def retry_generation_with_fix(prompt: str) -> str:
         },
         timeout=120
     )
+    resp.encoding = 'utf-8'
     resp.raise_for_status()
     return resp.json()['choices'][0]['message']['content'].strip()
 
