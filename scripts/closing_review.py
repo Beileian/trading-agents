@@ -1128,6 +1128,8 @@ def build_report(prices, thresholds, overseas_dir, overseas_conf):
     # ═══ 标题 ═══
     L.append(f"# A股收盘复盘 · {TODAY_DATE}")
     L.append("")
+    L.append(f"> 认知闭环 v2.6.5 | rubrics v1.0 | 数据: 新浪+腾讯+东方财富3路交叉")
+    L.append("")
 
     # ═══ 全局合成：今日一句话 ═══
     # 先跑一次穿越检测供合成使用
@@ -1242,12 +1244,12 @@ def build_report(prices, thresholds, overseas_dir, overseas_conf):
         if not extreme:
             L.append("")
     
-    # ═══ 4. 推荐方向 vs 实际收盘方向 (P2-2 三列差异表 + P0 VWAP标注 + P5 仓位) ═══
+    # ═══ 4. 推荐方向 vs 实际收盘方向 ═══
     L.append("**④ 推荐方向 vs 实际收盘方向**")
     sell_wrong = []
     mismatch_lines = []
-    vwap_corrected = set()  # 记录被VWAP修正的标的
-    pos_notes = {}  # 仓位调整说明
+    vwap_corrected = set()
+    pos_notes = {}
     for name in ALL_NAMES:
         if name not in prices or name not in thresholds:
             continue
@@ -1257,34 +1259,28 @@ def build_report(prices, thresholds, overseas_dir, overseas_conf):
         chg = p["chg_pct"]
         rec_dir = {"sell": "卖出", "buy": "买入"}.get(op, "持有")
         if chg > 0.5:
-            act_dir = f"↑ +{chg:.1f}%"
+            act_dir = f"↑ {chg:+.1f}%"
         elif chg < -0.5:
             act_dir = f"↓ {chg:.1f}%"
         else:
             act_dir = f"→ {chg:+.1f}%"
         reason = "—"
         if op == "sell" and chg > 0.5:
-            reason = "卖出判断偏早"
+            reason = "卖出偏早"
             sell_wrong.append(f"{name} +{chg:.1f}%")
         elif op == "buy" and chg < -0.5:
-            reason = "买入信号偏早"
+            reason = "买入偏早"
         elif op == "hold" and chg > 3:
             reason = "持有偏保守"
         elif op == "hold" and chg < -3:
             reason = "未提示卖出"
         emoji = "✅" if reason == "—" else "⚠️"
         # P0: VWAP标注
-        sup = t.get("support")
-        res = t.get("resistance")
-        vwap_tag = ""
-        # 检查是否被VWAP修正过（从records中继承）
+        t.get("support")
+        t.get("resistance")
         if t.get("_vwap_corrected"):
-            vwap_tag = "(VWAP)"
             vwap_corrected.add(name)
-        sres_str = f"支{sup}/阻{res}" if sup and res else ""
-        if sres_str and vwap_tag:
-            sres_str += f" {vwap_tag}"
-        # 仓位: 0%也显示，不设为空
+        # 仓位
         pos_raw = t.get("pos", "")
         if pos_raw != "" and pos_raw is not None:
             try:
@@ -1294,14 +1290,18 @@ def build_report(prices, thresholds, overseas_dir, overseas_conf):
                 pos_str = ""
         else:
             pos_str = ""
-        mismatch_lines.append(f"| {emoji} {name} | {rec_dir} | {act_dir} | {reason} | {pos_str} |")
+        # 精简格式：每行独立，不用表格
+        line = f"{emoji} {name} 推荐{rec_dir} → 实际{act_dir}"
+        if reason != "—":
+            line += f" ({reason})"
+        if pos_str:
+            line += f" | 仓位{pos_str}"
+        mismatch_lines.append(line)
 
-    L.append("| 标的 | 推荐 | 实际 | 偏差 | 仓位 |")
-    L.append("|------|------|------|------|------|")
     for ml in mismatch_lines:
         L.append(ml)
     if vwap_corrected:
-        L.append(f"\n> 支撑阻力位标注(VWAP)表示经成交量加权修正；共{len(vwap_corrected)}只 — {'，'.join(sorted(vwap_corrected))}")
+        L.append(f"\n> VWAP修正: {'，'.join(sorted(vwap_corrected))}，共{len(vwap_corrected)}只")
     L.append("")
     
     # ═══ 5. 价格穿越 ═══
