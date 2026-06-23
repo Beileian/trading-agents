@@ -93,6 +93,7 @@ Schema 校验经 $MAX_GEN_RETRIES 次重试仍未通过，已阻断推送。
 fi
 
 # 步骤3.5: Rubric 质量评估
+RUBRIC_LOW_QUALITY=false
 TRADE_FILE="$REPORT_DIR/trade_signals_${DATE_TAG}.md"
 RUBRIC_SCRIPT="$PROJECT_DIR/rubrics/run_rubrics.py"
 RUBRIC_PASS=true
@@ -106,13 +107,8 @@ if [ -f "$RUBRIC_SCRIPT" ] && [ -f "$TRADE_FILE" ]; then
     /usr/bin/python3 "$RUBRIC_SCRIPT" $RUBRIC_ARGS 2>&1 || {
         RUBRIC_EXIT=$?
         if [ $RUBRIC_EXIT -eq 2 ]; then
-            echo "[RUBRIC] REJECT — 质量门槛未通过，阻断推送"
-            echo "# 🚨 交易推荐质量不达标
-
-Rubric评估判定为 REJECT（veto项/方向一致性未通过）。
-时间: $(TZ=Asia/Shanghai date +%Y-%m-%d\ %H:%M:%S)
-详情: $PROJECT_DIR/rubrics/rubric_log.jsonl" | python3 "$PUSH_SCRIPT" 2>/dev/null
-            exit 1
+            echo "[RUBRIC] REJECT — 质量门槛未通过，标记为低质量继续推送"
+            RUBRIC_LOW_QUALITY=true
         elif [ $RUBRIC_EXIT -eq 1 ]; then
             echo "[RUBRIC] LOW_CONFIDENCE — 部分项未通过，标记为低置信度推送"
         fi
@@ -131,13 +127,17 @@ SIGNAL_FILE="$PROJECT_DIR/reports/overseas_signal_${DATE_STR}.md"
 OPINION_FILE="$REPORT_DIR/opinions_${DATE_TAG}.md"
 HAS_CONTENT=false
 
-# Rubric 低置信度标记
+# Rubric 质量标记
 RUBRIC_TAG=""
-RUBRIC_LOG="$PROJECT_DIR/rubrics/rubric_log.jsonl"
-if [ -f "$RUBRIC_LOG" ]; then
-    LAST_VERDICT=$(tail -1 "$RUBRIC_LOG" 2>/dev/null | python3 -c "import sys,json; d=json.load(sys.stdin); print(d.get('verdict',''))" 2>/dev/null || echo "")
-    if [ "$LAST_VERDICT" = "low_confidence" ]; then
-        RUBRIC_TAG="⚠️ 低置信度 "
+if [ "${RUBRIC_LOW_QUALITY:-false}" = "true" ]; then
+    RUBRIC_TAG="⚠️ 低质量 "
+else
+    RUBRIC_LOG="$PROJECT_DIR/rubrics/rubric_log.jsonl"
+    if [ -f "$RUBRIC_LOG" ]; then
+        LAST_VERDICT=$(tail -1 "$RUBRIC_LOG" 2>/dev/null | python3 -c "import sys,json; d=json.load(sys.stdin); print(d.get('verdict',''))" 2>/dev/null || echo "")
+        if [ "$LAST_VERDICT" = "low_confidence" ]; then
+            RUBRIC_TAG="⚠️ 低置信度 "
+        fi
     fi
 fi
 
