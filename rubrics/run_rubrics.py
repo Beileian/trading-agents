@@ -52,7 +52,7 @@ def _get_deepseek_key():
     return ""
 
 
-def call_llm(prompt: str, max_tokens: int = 200) -> str:
+def call_llm(prompt: str, max_tokens: int = 1536) -> str:
     """调用 DeepSeek 做 LLM 评判"""
     import requests
     key = _get_deepseek_key()
@@ -129,7 +129,7 @@ def evaluate_llm_item(item: dict, report_text: str, analysis_text: str = "") -> 
         prompt = prompt[:8000] + "\n\n[...报告过长已截断...]"
 
     try:
-        llm_output = call_llm(prompt, max_tokens=300)
+        llm_output = call_llm(prompt, max_tokens=1536)
     except Exception as e:
         return {"pass": False, "llm_output": None, "error": str(e)}
 
