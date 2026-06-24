@@ -21,8 +21,8 @@ import requests
 
 # ── Config ──────────────────────────────────────────────
 CACHE_DIR = "/root/.openclaw/workspace/projects/trading-agents/logs/cache"
-REPORT_PATH = "/root/.openclaw/workspace/projects/trading-agents/reports/trading_analysis_20260623.md"
-OPINIONS_PATH = "/root/.openclaw/workspace/projects/trading-agents/reports/opinions_20260623.md"
+REPORT_PATH = "/root/.openclaw/workspace/projects/trading-agents/reports/trading_analysis_20260624.md"
+OPINIONS_PATH = "/root/.openclaw/workspace/projects/trading-agents/reports/opinions_20260624.md"
 def _load_deepseek_key():
     import os as _os
     key = _os.environ.get("DEEPSEEK_API_KEY", "")
@@ -44,7 +44,7 @@ DEEPSEEK_MODEL = "deepseek-v4-pro"
 
 SYMBOLS = symbols_config.SYMBOLS
 
-TODAY_STR = "2026-06-23"
+TODAY_STR = "2026-06-24"
 
 # ── Helpers ──────────────────────────────────────────────
 
@@ -186,7 +186,7 @@ def build_prompt(symbol, name, stype, metrics, extra):
 
 行业背景要求：结合标的所属行业，一句话说明当前该行业的核心驱动或压力（如政策变化、利率环境、资金风格偏好）。如果是宽基指数，说明当前市场风格的宏观逻辑。
 
-具体风险要求：指出一个可指认的、影响该标的近期走势的具体风险事件或因素（如解禁高峰、政策细则未落地、成本端波动、竞争格局变化）。使用具体数字或时间窗口，不使用笼统措辞。"""
+具体风险要求：指出一个可指认的、影响该标的近期走势的具体风险事件或因素。优先从技术指标形态推演（如RSI背离、均线死叉、MACD顶背离、布林带突破方向未确认），技术上无明显风险信号时，可给出基本面风险（如解禁高峰、政策细则未落地、成本端波动、竞争格局变化）。使用具体数字或时间窗口，不使用笼统措辞。"""
 
     # Price vs MAs
     price = extra["last_close"]
@@ -383,7 +383,7 @@ def main():
     header = f"""# 📊 A股技术分析与交易决策报告
 
 **生成日期**: {TODAY_STR}
-**数据范围**: 2021-06-04 至 2026-06-23（约5年日线）
+**数据范围**: 2021-06-04 至 2026-06-24（约5年日线）
 **分析标的**: 7只（3指数 + 4个股）
 **分析模型**: DeepSeek-chat
 

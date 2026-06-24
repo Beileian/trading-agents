@@ -1169,10 +1169,12 @@ def main():
             op_label = '持有'
             hold += 1
 
-        # 标的段落 — 不含仓位
+        # 标的段落 — 含仓位
         header = f"{op_icon}{r['name']}  {r['price']}"
         if r['bias'] and r['bias'] != '-':
             header += f"  乖离{r['bias']}"
+        if r['pos'] and r['pos'] != '-' and r['pos'] != '0%':
+            header += f"  仓位{r['pos']}"
         header += f"  {op_label}"
         lines.append(header)
 

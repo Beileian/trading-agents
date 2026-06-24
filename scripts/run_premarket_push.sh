@@ -172,11 +172,7 @@ if [ -f "$TRADE_FILE" ]; then
 fi
 
 if [ -f "$OPINION_FILE" ]; then
-    echo "## 外部观点参考" >> "$PUSH_FILE"
-    echo "*数据源: IMA 知识库（公众号文章）*" >> "$PUSH_FILE"
-    echo "" >> "$PUSH_FILE"
-    # 用 DeepSeek 对每位作者的文章做一句话概括（每人≤100字）
-    python3 "$SCRIPT_DIR/summarize_ima_opinions.py" "$OPINION_FILE" >> "$PUSH_FILE" 2>/dev/null || {
+    OPS_OUTPUT=$(python3 "$SCRIPT_DIR/summarize_ima_opinions.py" "$OPINION_FILE" 2>/dev/null || {
         # fallback: 提取标题做简要概括
         python3 -c "
 with open('$OPINION_FILE') as f:
@@ -209,9 +205,18 @@ for sec_name, articles in sections.items():
         titles = titles[:97] + '...'
     print(f'{clean_name}：近期关注{titles}。')
 "
-    }
-    echo "" >> "$PUSH_FILE"
-    HAS_CONTENT=true
+    })
+    OPS_CLEAN=$(echo "$OPS_OUTPUT" | sed '/^$/d')
+    if [ -n "$OPS_CLEAN" ]; then
+        echo "## 外部观点参考" >> "$PUSH_FILE"
+        echo "*数据源: IMA 知识库（公众号文章）*" >> "$PUSH_FILE"
+        echo "" >> "$PUSH_FILE"
+        echo "$OPS_CLEAN" >> "$PUSH_FILE"
+        echo "" >> "$PUSH_FILE"
+        HAS_CONTENT=true
+    else
+        echo "[PUSH] IMA观点为空，跳过外部参考section"
+    fi
 fi
 
 echo "" >> "$PUSH_FILE"
