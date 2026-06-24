@@ -42,7 +42,30 @@ MAX_TOTAL_RATIO = 0.80      # 总仓位 80%
 
 # 价格获取
 def _fetch_close_price(code: str, date_str: str) -> Optional[float]:
-    """从 closing_review 收盘快照获取收盘价（唯一数据源）"""
+    """获取收盘价：先查快照，ETF代码单独走腾讯实时行情"""
+    import urllib.request
+    # ETF 代码单独走腾讯行情（快照里存的是指数点位，不是ETF基金价）
+    ETF_TENCENT = {
+        "sh588000": "sh588000",   # 科创50ETF
+        "sh562500": "sh562500",   # 机器人ETF
+    }
+    if code in ETF_TENCENT:
+        tc_code = ETF_TENCENT[code]
+        try:
+            url = f"http://qt.gtimg.cn/q={tc_code}"
+            req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"})
+            resp = urllib.request.urlopen(req, timeout=10)
+            raw = resp.read().decode("gbk")
+            m = re.search(r'="(.+)"', raw)
+            if m:
+                fields = m.group(1).split("~")
+                if len(fields) > 4:
+                    price = float(fields[3])  # 最新价
+                    if price > 0:
+                        return price
+        except Exception as e:
+            print(f"  [ETF行情] {code} 腾讯拉取失败: {e}")
+        # fallback: 从快照查（中证机器人已经在快照里存了ETF价）
     date_tag = date_str.replace("-", "")
     snapshot_file = f"{PROJECT_DIR}/reports/close_snapshot_{date_tag}.json"
     if not os.path.exists(snapshot_file):
@@ -61,7 +84,7 @@ def _fetch_close_price(code: str, date_str: str) -> Optional[float]:
 
 # 名称映射
 _CODE_NAME = {
-    "sh000016": "上证50", "sh000300": "沪深300", "sh588000": "科创50",
+    "sh000016": "上证50", "sh000300": "沪深300", "sh000688": "科创50", "sh588000": "科创50",
     "sh601288": "农业银行", "sh601988": "中国银行", "sh600036": "招商银行",
     "sh600795": "国电电力", "sz000066": "中国长城", "sh600562": "国睿科技",
     "sh562500": "中证机器人",
@@ -387,7 +410,7 @@ def cmd_execute(date_str: str):
     print()
 
     # 指数ETF列表（首次建仓不选ETF）
-    INDEX_ETFS = {"sh000016", "sh000300", "sh000688"}
+    INDEX_ETFS = {"sh000016", "sh000300", "sh000688", "sh588000"}
 
     # 执行交易
     buys, sells = 0, 0
