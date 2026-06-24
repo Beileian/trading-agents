@@ -30,7 +30,7 @@
 
 组件版本:
   generate_trade_signals.py  v2.5.0  开盘推送（实时开盘价+Schema校验+自动重试+仓位显示）
-  closing_review.py          v2.6.0  收盘复盘（三重校验+数据源溯源）
+  closing_review.py          v2.6.5  收盘复盘（三重校验+仓位联动+版本标注）
   price_watch.py             v2.1.0  盘中价格穿越（钉钉直推+跨日去重）
   update_daily_cache.py      v1.1    日线缓存（新浪+快照兜底）
   extract_ima_opinions.py    v1.1    IMA观点提取（等比衰减）
