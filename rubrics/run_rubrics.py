@@ -99,8 +99,9 @@ def run_script(script_path: str, args: list[str]) -> dict:
         return {"pass": False, "result": {"error": str(e)}, "exit_code": -1, "stderr": str(e)}
 
 
-def load_rubric() -> dict:
-    with open(RUBRIC_FILE) as f:
+def load_rubric(rubric_file: str = None) -> dict:
+    path = rubric_file if rubric_file else RUBRIC_FILE
+    with open(path) as f:
         return json.load(f)
 
 
@@ -262,6 +263,12 @@ def main():
         if idx + 1 < len(sys.argv):
             analysis_file = sys.argv[idx + 1]
 
+    rubric_file = None
+    if "--rubric" in sys.argv:
+        idx = sys.argv.index("--rubric")
+        if idx + 1 < len(sys.argv):
+            rubric_file = sys.argv[idx + 1]
+
     if not os.path.exists(report_file):
         print(f"文件不存在: {report_file}", file=sys.stderr)
         sys.exit(1)
@@ -274,7 +281,7 @@ def main():
         with open(analysis_file) as f:
             analysis_text = f.read()
 
-    rubric = load_rubric()
+    rubric = load_rubric(rubric_file)
     items = rubric["items"]
 
     results = []

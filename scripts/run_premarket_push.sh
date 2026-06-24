@@ -92,29 +92,47 @@ Schema 校验经 $MAX_GEN_RETRIES 次重试仍未通过，已阻断推送。
     exit 1
 fi
 
-# 步骤3.5: Rubric 质量评估
+# 步骤3.5: Rubric 质量评估（双套标准）
+#   A. 分析报告质量 → trading_analysis → trade_recommendation.json (6维度)
+#   B. 信号格式质量 → trade_signals → trade_signals.json (4维度)
 RUBRIC_LOW_QUALITY=false
 TRADE_FILE="$REPORT_DIR/trade_signals_${DATE_TAG}.md"
+ANALYSIS_FILE="$REPORT_DIR/trading_analysis_${DATE_TAG}.md"
 RUBRIC_SCRIPT="$PROJECT_DIR/rubrics/run_rubrics.py"
-RUBRIC_PASS=true
-if [ -f "$RUBRIC_SCRIPT" ] && [ -f "$TRADE_FILE" ]; then
-    echo "[3.5/5] Rubric质量评估..."
-    ANALYSIS_FILE="$REPORT_DIR/trading_analysis_${DATE_TAG}.md"
-    RUBRIC_ARGS="$TRADE_FILE"
-    if [ -f "$ANALYSIS_FILE" ]; then
-        RUBRIC_ARGS="$TRADE_FILE --analysis $ANALYSIS_FILE"
+SIGNAL_RUBRIC="$PROJECT_DIR/rubrics/trade_signals.json"
+RECO_RUBRIC="$PROJECT_DIR/rubrics/trade_recommendation.json"
+if [ -f "$RUBRIC_SCRIPT" ]; then
+    # A. 分析报告质量评估
+    if [ -f "$ANALYSIS_FILE" ] && [ -f "$RECO_RUBRIC" ]; then
+        echo "[3.5/5] Rubric A: 分析报告质量..."
+        /usr/bin/python3 "$RUBRIC_SCRIPT" "$ANALYSIS_FILE" --rubric "$RECO_RUBRIC" 2>&1 || {
+            RUBRIC_EXIT=$?
+            if [ $RUBRIC_EXIT -eq 2 ]; then
+                echo "[RUBRIC-A] REJECT"
+            elif [ $RUBRIC_EXIT -eq 1 ]; then
+                echo "[RUBRIC-A] LOW_CONFIDENCE"
+            fi
+        }
+    else
+        echo "[3.5/5] Rubric A: 跳过（分析报告或rubric缺失）"
     fi
-    /usr/bin/python3 "$RUBRIC_SCRIPT" $RUBRIC_ARGS 2>&1 || {
-        RUBRIC_EXIT=$?
-        if [ $RUBRIC_EXIT -eq 2 ]; then
-            echo "[RUBRIC] REJECT — 质量门槛未通过，标记为低质量继续推送"
-            RUBRIC_LOW_QUALITY=true
-        elif [ $RUBRIC_EXIT -eq 1 ]; then
-            echo "[RUBRIC] LOW_CONFIDENCE — 部分项未通过，标记为低置信度推送"
-        fi
-    }
+    # B. 信号格式质量评估 → 决定推送质量标记
+    if [ -f "$TRADE_FILE" ] && [ -f "$SIGNAL_RUBRIC" ]; then
+        echo "[3.5/5] Rubric B: 信号格式质量..."
+        /usr/bin/python3 "$RUBRIC_SCRIPT" "$TRADE_FILE" --rubric "$SIGNAL_RUBRIC" 2>&1 || {
+            RUBRIC_EXIT=$?
+            if [ $RUBRIC_EXIT -eq 2 ]; then
+                echo "[RUBRIC-B] REJECT — 质量门槛未通过，标记为低质量继续推送"
+                RUBRIC_LOW_QUALITY=true
+            elif [ $RUBRIC_EXIT -eq 1 ]; then
+                echo "[RUBRIC-B] LOW_CONFIDENCE — 部分项未通过，标记为低置信度推送"
+            fi
+        }
+    else
+        echo "[3.5/5] Rubric B: 跳过（信号表或rubric缺失）"
+    fi
 else
-    echo "[3.5/5] Rubric质量评估... 跳过（脚本或报告缺失）"
+    echo "[3.5/5] Rubric质量评估... 跳过（脚本缺失）"
 fi
 
 # 步骤4: 虚拟盘执行（基于今日交易推荐）

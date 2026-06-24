@@ -1,0 +1,60 @@
+{
+  "name": "交易信号格式质量",
+  "description": "对 trade_signals_*.md 压缩推送格式的结构与准确性评估",
+  "version": "1.0.0",
+  "created": "2026-06-24",
+  "updated": "2026-06-24",
+  "aggregation": "normalized_weighted_average",
+  "score_range": "0-10",
+  "items": [
+    {
+      "id": "schema_validity",
+      "description": "信号表格式必须合法：每只标的含方向标识(🟡/🔴/🟢)、支撑/阻力位、触发条件",
+      "rationale": "格式残缺的推送无法传递可执行指令",
+      "weight": "veto",
+      "judge": "script",
+      "script": "rubrics/validate_schema.py",
+      "pass_condition": "exit code 0",
+      "fail_action": "reject_and_retry",
+      "normalized_score_rule": "pass=10, fail=0"
+    },
+    {
+      "id": "factual_accuracy",
+      "description": "信号表中引用的价格、乖离率与数据源一致",
+      "rationale": "历史数据可交叉验证，事实性错误摧毁可信度",
+      "weight": "high",
+      "judge": "script",
+      "script": "rubrics/check_factual.py",
+      "pass_condition": "所有引用数字与缓存数据偏差 < 5%",
+      "fail_action": "mark_low_confidence",
+      "normalized_score_rule": "全通过=10, 部分偏差=5(按比例), 大量错误=0"
+    },
+    {
+      "id": "data_timeliness",
+      "description": "TimesFM校准数据时效性检查",
+      "rationale": "过期校准数据导致合成判断不准确",
+      "weight": "high",
+      "judge": "script",
+      "script": "rubrics/check_data_timeliness.py",
+      "pass_condition": "exit code 0",
+      "fail_action": "mark_low_confidence",
+      "normalized_score_rule": "pass=10, 每超7天扣1分"
+    },
+    {
+      "id": "action_consistency",
+      "description": "交易方向(买/持/卖)与触发理由逻辑一致",
+      "rationale": "L二方向与理由矛盾会导致用户执行错误决策",
+      "weight": "high",
+      "judge": "llm",
+      "prompt": "请以0-10分评分以下交易信号表中操作方向与触发理由的一致性：\n- 0-3分：多数标的操作方向与触发理由矛盾\n- 4-6分：部分标的逻辑模糊，方向与理由不够一致\n- 7-8分：方向与理由基本一致，个别标的说服力偏弱\n- 9-10分：所有标的操作方向与触发理由完全一致，逻辑自洽\n\n输出格式：仅输出一个数字，如 8。不要输出理由。",
+      "pass_condition": "分数 >= 7",
+      "fail_action": "reject_and_retry",
+      "normalized_score_rule": "LLM直接输出0-10分"
+    }
+  ],
+  "thresholds": {
+    "low_confidence": "任一 high 项得分 < 6 或总分 < 6.0",
+    "reject": "veto 项未通过(schema=0) 或 action_consistency < 7"
+  },
+  "log": "rubrics/rubric_log.jsonl"
+}
