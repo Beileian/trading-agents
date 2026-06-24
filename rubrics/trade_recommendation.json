@@ -1,9 +1,9 @@
 {
   "name": "交易推荐质量",
   "description": "对 generate_trade_signals.py LLM 输出的多维质量评估标准",
-  "version": "3.0.0",
+  "version": "3.1.0",
   "created": "2026-06-21",
-  "updated": "2026-06-23",
+  "updated": "2026-06-24",
   "aggregation": "normalized_weighted_average",
   "score_range": "0-10",
   "items": [
@@ -41,12 +41,23 @@
       "normalized_score_rule": "LLM直接输出0-10分"
     },
     {
+      "id": "data_timeliness",
+      "description": "TimesFM校准数据最新窗口是否在14天内",
+      "rationale": "校准数据过期会导致合成判断依赖不可靠的预测结果",
+      "weight": "high",
+      "judge": "script",
+      "script": "rubrics/check_data_timeliness.py",
+      "pass_condition": "exit code 0",
+      "fail_action": "mark_low_confidence",
+      "normalized_score_rule": "pass=10, 每超7天扣1分, 最低0"
+    },
+    {
       "id": "risk_specificity",
-      "description": "理由中包含至少一个基于技术指标形态的风险推演",
-      "rationale": "纯技术面分析的风险应来自技术指标形态推演，不是基本面事件",
+      "description": "理由中包含具体的风险推演（技术面或基本面均可）",
+      "rationale": "A股交易决策中基本面风险分量不可忽视，接受混合风险来源",
       "weight": "medium",
       "judge": "llm",
-      "prompt": "请以0-10分评分以下推荐理由中技术面风险推演的质量：\n- 0-3分：无风险推演或全是笼统表述\n- 4-6分：有技术风险提及但不够具体（如只说'注意回调风险'）\n- 7-8分：有1-2个基于具体技术指标的风险推演（如均线死叉、RSI超买背离）\n- 9-10分：多数标的都有具体技术指标形态风险推演\n\n输出格式：仅输出一个数字，如 6。不要输出理由。",
+      "prompt": "请以0-10分评分以下推荐理由中风险推演的具体程度：\n- 0-3分：无风险推演或全是笼统表述（如'注意回调风险'）\n- 4-6分：有风险提及但不够具体，泛泛而谈\n- 7-8分：有1-2个具体的风险推演（技术面如RSI背离/均线死叉，或基本面如解禁/季报/政策风险）\n- 9-10分：多数标的都有具体、可验证的风险推演\n\n输出格式：仅输出一个数字，如 6。不要输出理由。",
       "pass_condition": "分数 >= 6",
       "fail_action": "mark_low_confidence",
       "normalized_score_rule": "LLM直接输出0-10分"

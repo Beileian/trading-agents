@@ -129,10 +129,21 @@ def evaluate_llm_item(item: dict, report_text: str, analysis_text: str = "") -> 
     if len(prompt) > 8000:
         prompt = prompt[:8000] + "\n\n[...报告过长已截断...]"
 
-    try:
-        llm_output = call_llm(prompt, max_tokens=2048)
-    except Exception as e:
-        return {"pass": False, "llm_output": None, "error": str(e)}
+    import time as _time
+    llm_output = None
+    last_error = None
+    for retry in range(3):
+        try:
+            llm_output = call_llm(prompt, max_tokens=2048)
+            break
+        except Exception as e:
+            last_error = str(e)
+            if retry < 2:
+                wait = (retry + 1) * 2
+                print(f"    ↳ LLM重试 {retry+1}/2 ({wait}s后)...", file=sys.stderr)
+                _time.sleep(wait)
+    if llm_output is None:
+        return {"pass": False, "llm_output": None, "error": last_error}
 
     # 判断通过条件 — v3.0 统一使用0-10分
     cond = item["pass_condition"]
