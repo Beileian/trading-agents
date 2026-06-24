@@ -119,23 +119,31 @@ def _ima_search_batch(queries, kb_id=KB_ID, per_query=15):
                 "title": nb.get("title", "无标题"),
                 "summary": nb.get("summary", ""),
                 "date": note_date,
+                "folder_id": nb.get("note_ext_info", {}).get("folder_id", ""),
             })
     return articles
 
 
-def _detect_section(title, summary):
-    """根据标题和摘要检测文章来源"""
-    full = title + summary[:300]
-    if any(kw in full for kw in ['二小姐', '二姐']):
+def _detect_section(title, summary, folder_id=""):
+    """根据 folder_id 精确匹配 + 标题/摘要后备检测"""
+    # 优先用 folder_id 精确匹配（最可靠）
+    if folder_id in FOLDER_MAP:
+        return FOLDER_MAP[folder_id]
+    # 后备：内容特征匹配
+    full = (title + ' ' + summary)[:500]
+    # 二小姐笔记特征
+    if any(kw in title for kw in ['二小姐', 'ETF星球', '发车', '韭界风云', 'ETF发车', '逃命机会', '财富密码', '踩踏', '剧本杀']):
         return '二小姐笔记'
-    if '与慕同行' in full:
+    # 暮云思辨特征
+    if any(kw in title for kw in ['与慕同行', '一辈子', '一代人', '从教育到交易', '上桌吃菜',
+            '不可能三角', '经法手札', '同行者树洞', '场外叙事', '登高', '和解', '操作建议',
+            '灵魂质问', '投资组合该怎么拼']):
         return '暮云思辨'
-    if any(kw in title for kw in ['一辈子的交易', '一代人', '从教育到交易', '上桌吃菜', '不可能三角']):
-        return '暮云思辨'
-    if any(kw in full for kw in ['EarlETF', '张翼轸']):
+    # EarlETF特征
+    if any(kw in full for kw in ['EarlETF', '张翼轸', '红色火箭']):
         return 'EarlETF'
-    # Heuristic: 数据复盘 is EarlETF signature
-    if '数据复盘' in title:
+    if any(kw in title for kw in ['数据复盘', '动量模型', '图表周刊', '全天候',
+            '200日均线', '表现费', 'SK海力士', '主动ETF']):
         return 'EarlETF'
     return None  # 无法识别的来源
 
@@ -174,13 +182,18 @@ def extract_articles():
 
     articles = []
     for a in raw_articles:
+        title = a['title']
+        # 跳过非金融文章：对话记录、个人笔记、技术运维
+        if any(skip in title for skip in ['腾云马对话', '对话记录', 'Gateway', 'Cron', 'DeepSeek API',
+                'Two Gateway', '搜索完毕', '重跑IMA', '要用AI做的', 'DataMaster']):
+            continue
         # 在标题+摘要中做关键词匹配（摘要已含文章开头内容）
-        text = a['title'] + a['summary'][:3000]
+        text = title + a['summary'][:3000]
         hit_count = sum(1 for kw in keywords if kw in text)
         if hit_count < 2:
             continue
 
-        section = _detect_section(a['title'], a['summary'])
+        section = _detect_section(a['title'], a['summary'], a.get('folder_id', ''))
         if section is None:
             continue  # 无法识别的来源跳过
 
