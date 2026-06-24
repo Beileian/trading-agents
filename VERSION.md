@@ -1,9 +1,19 @@
 #!/usr/bin/env python3
 """
-金桥量化交易推荐系统 v2.5.0
+金桥量化交易推荐系统 v2.5.1
 
 版本历史:
-  v2.5.0 (2026-06-17): 数据准确性基础设施加固 — 三重校验体系 + 外盘自包含 + 经验沉淀
+  v2.5.1 (2026-06-24): Rubrics 评审体系升级 — 双套标准 + TimesFM时效性门禁
+    - rubrics v3.2.0: 分析报告5维度(analysis_completeness + LLM×3 + data_timeliness)
+    - rubrics v1.0.0: 信号格式4维度(schema + factual + timeliness + action_consistency)
+    - 新增 check_data_timeliness.py: TimesFM校准数据14天时效性检查(high级)
+    - 新增 check_analysis_completeness.py: 分析报告格式完整性检查(veto)
+    - run_rubrics.py: LLM评判加3次重试(2s/4s退避) + --rubric参数支持
+    - risk_specificity prompt对齐实际输出: 接受混合风险(技术面+基本面)
+    - 信号表恢复仓位字段: 支撑/阻力行上方显示仓位百分比
+    - trading_analysis prompt风险边界: 技术指标形态优先→基本面补充
+    - IMA空内容兜底: 观点为空时跳过外部参考section
+    - run_premarket_push.sh: 步骤3.5分Rubric A+B双通道评估
     - 收盘复盘 v2.6.0: 新浪时间戳校验 + 腾讯多源交叉 + 数据源溯源摘要
     - 开盘推送 v2.4.0: 实时开盘价拉取（腾讯主源+新浪交叉+昨收fallback）
     - 日线缓存 v1.1: 新浪失败时收盘快照兜底
@@ -19,7 +29,7 @@
   v1.x: 初版迭代
 
 组件版本:
-  generate_trade_signals.py  v2.4.0  开盘推送（实时开盘价+Schema校验+自动重试）
+  generate_trade_signals.py  v2.5.0  开盘推送（实时开盘价+Schema校验+自动重试+仓位显示）
   closing_review.py          v2.6.0  收盘复盘（三重校验+数据源溯源）
   price_watch.py             v2.1.0  盘中价格穿越（钉钉直推+跨日去重）
   update_daily_cache.py      v1.1    日线缓存（新浪+快照兜底）
