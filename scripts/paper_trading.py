@@ -225,7 +225,7 @@ def parse_signal_line(line: str) -> Optional[dict]:
            支撑6.67 / 阻力7.20
     """
     # 匹配名称+价格行
-    m = re.match(r'[🔴🟡🟢]\s+([^\s]+)\s+([\d.]+)\s+乖离.+?\s+(\S+)', line)
+    m = re.match(r'[🔴🟡🟢]\s+(.+?)\s+([\d.]+)\s+乖离.+?(卖出|买入|持有)$', line)
     if not m:
         return None
     name = m.group(1).strip()
@@ -239,7 +239,7 @@ def parse_signal_line(line: str) -> Optional[dict]:
     code = None
     for k, v in _CODE_NAME.items():
         if v == name:
-            code = k
+            code = normalize_code(k)
             break
     if not code:
         return None
@@ -247,6 +247,8 @@ def parse_signal_line(line: str) -> Optional[dict]:
     # 判断操作方向
     if action_word == "卖出":
         signal = "sell"
+    elif action_word == "买入":
+        signal = "buy"
     elif action_word == "持有":
         signal = "hold"
     else:
@@ -266,6 +268,12 @@ def get_code_for_name(name: str) -> Optional[str]:
         if v == name:
             return k
     return None
+
+def normalize_code(code: str) -> str:
+    """统一code格式: 去掉sh/sz前缀"""
+    if code.startswith("sh") or code.startswith("sz"):
+        return code[2:]
+    return code
 
 
 def get_shares_for_amount(amount: float, price: float) -> int:
@@ -409,10 +417,10 @@ def cmd_execute(date_str: str):
     print(f"执行前: 净值 {state.net_value:.4f} | 现金 ¥{state.cash:,.2f}")
     print()
 
-    # 指数ETF列表（首次建仓不选ETF）
-    INDEX_ETFS = {"sh000016", "sh000300", "sh000688", "sh588000"}
-
-    # 执行交易
+    # 执行交易: 基于交易推荐信号自动操作
+    # - 卖出 → 清仓
+    # - 买入 → 新建仓（A股个股和ETF均可，受仓位上限约束）
+    # - 持有 → 不动（已有持仓的加仓仍需触发词匹配）
     buys, sells = 0, 0
     for sig in signals:
         code = sig["code"]
@@ -421,7 +429,7 @@ def cmd_execute(date_str: str):
         signal = sig["signal"]
         reason = triggers.get(code, "交易推荐信号")
 
-        # 卖出：信号为"卖出"且有持仓
+        # 卖出：信号为"卖出"且有持仓 → 无条件清仓
         if signal == "sell":
             if code in state.positions:
                 trade = execute_order(state, code, name, "sell", price, reason, date_str)
@@ -429,24 +437,18 @@ def cmd_execute(date_str: str):
                     sells += 1
             continue
 
-        # 买入逻辑：
-        # - 已有持仓 + 触发含"加仓" → 加仓
-        # - 首次建仓（空仓/无此标的）→ 只买个股（非ETF），触发含"加仓" or "突破" or "企稳"
-        if code in INDEX_ETFS:
-            # ETF只在已有持仓时加仓，不首次建仓
-            if code in state.positions and reason and ("加仓" in reason or "突破" in reason):
+        # 买入：信号为"买入"且无持仓 → 首次建仓
+        if signal == "buy":
+            if code not in state.positions:
                 trade = execute_order(state, code, name, "buy", price, reason, date_str)
                 if trade:
                     buys += 1
-        else:
-            # 个股
-            is_buy_trigger = reason and ("加仓" in reason or "突破" in reason or "企稳" in reason or "买入" in reason)
-            if code in state.positions and is_buy_trigger:
-                trade = execute_order(state, code, name, "buy", price, reason, date_str)
-                if trade:
-                    buys += 1
-            elif code not in state.positions and is_buy_trigger:
-                # 首次建仓个股
+            continue
+
+        # 持有：已有持仓 + 触发含加仓关键词 → 加仓
+        if signal == "hold" and code in state.positions:
+            has_buy_trigger = reason and any(kw in reason for kw in ["加仓", "突破", "企稳", "买入"])
+            if has_buy_trigger:
                 trade = execute_order(state, code, name, "buy", price, reason, date_str)
                 if trade:
                     buys += 1

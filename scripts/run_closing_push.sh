@@ -23,8 +23,12 @@ echo "[1/3] 运行收盘复盘..."
     echo "[WARN] 收盘复盘脚本失败，使用降级推送"
 }
 
-# 步骤2: 更新虚拟盘收盘净值（从复盘快照JSON读取收盘价）
-echo "[2/3] 虚拟盘收盘更新..."
+# 步骤2a: 虚拟盘执行交易（基于今早交易推荐信号）
+echo "[2a/4] 虚拟盘交易执行..."
+/usr/bin/python3 "$SCRIPT_DIR/paper_trading.py" execute "$DATE_STR" 2>&1 || echo "[WARN] 虚拟盘交易执行失败"
+
+# 步骤2b: 虚拟盘收盘净值更新
+echo "[2b/4] 虚拟盘收盘更新..."
 /usr/bin/python3 "$SCRIPT_DIR/paper_trading.py" close "$DATE_STR" 2>&1 || echo "[WARN] 虚拟盘收盘更新失败"
 
 # 步骤3: 推送（含降级）
@@ -52,10 +56,10 @@ if [ -f "$REVIEW_FILE" ] && [ -s "$REVIEW_FILE" ]; then
         cp /tmp/trade_backup.json "$PROJECT_DIR/rubrics/trade_recommendation.json" 2>/dev/null || true
     fi
     
-    echo "[3/3] 复盘报告推送中..."
+    echo "[4/4] 复盘报告推送中..."
     cat "$REVIEW_FILE" | python3 "$PUSH_SCRIPT"
 else
-    echo "[3/3] 复盘文件缺失，推送降级简报..."
+    echo "[4/4] 复盘文件缺失，推送降级简报..."
     # 降级方案：推送简单收盘提醒
     cat << EOF | python3 "$PUSH_SCRIPT"
 # 📉 A股收盘复盘 · ${DATE_STR}
