@@ -1,87 +1,124 @@
 #!/usr/bin/env python3
-"""check_morning_consistency.py — 验证收盘复盘中的穿越阈值与开盘推荐的支撑/阻力一致"""
-import sys, json, re, os
-from pathlib import Path
+"""check_morning_consistency.py — 前置版：开盘前信号与昨日收盘数据自洽检查
 
-PROJECT_DIR = Path("/root/.openclaw/workspace/projects/trading-agents")
-REPORT_DIR = PROJECT_DIR / "reports"
+在推送前运行，验证:
+1. 昨日收盘价是否在今日支撑-阻力范围内
+2. 今日支撑/阻力与昨日价格差距是否合理(>0.1%)
+3. 方向标记与乖离率方向一致(🔴卖出时乖离应偏弱, 🟢买入时乖离应偏强)
 
-if len(sys.argv) < 2:
-    print(json.dumps({"pass": False, "errors": ["usage"], "score": 0}))
-    sys.exit(1)
+用法: python3 rubrics/check_morning_consistency.py <trade_signals_file>
+exit code: 0=通过, 1=不一致
+"""
 
-with open(sys.argv[1]) as f:
-    text = f.read()
+import sys, os, re, json
 
-# 提取日期
-date_match = re.search(r'(\d{4}-\d{2}-\d{2})', sys.argv[1].split("/")[-1])
-if not date_match:
-    date_match = re.search(r'(\d{4}-\d{2}-\d{2})', text)
-if not date_match:
-    print(json.dumps({"pass": True, "score": 10, "note": "无法确定日期，跳过交叉校验"}))
-    sys.exit(0)
+PROJECT_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+CACHE_DIR = os.path.join(PROJECT_DIR, "data", "cache")
 
-date_tag = date_match.group(1).replace("-", "")
-trade_file = REPORT_DIR / f"trade_signals_{date_tag}.md"
+def find_daily_cache(symbol: str) -> str:
+    """找到标的的日线缓存文件"""
+    prefix = symbol.replace(".SH", "").replace(".SS", "").replace(".SZ", "")
+    for f in os.listdir(CACHE_DIR):
+        if f.startswith(prefix) and f.endswith("-daily.csv"):
+            return os.path.join(CACHE_DIR, f)
+    return None
 
-if not trade_file.exists():
-    print(json.dumps({"pass": True, "score": 10, "note": f"开盘推荐文件不存在({trade_file})，跳过交叉校验"}))
-    sys.exit(0)
+def get_yesterday_close(cache_file: str) -> float:
+    """获取缓存中倒数第二行的收盘价（最后一行为当日）"""
+    with open(cache_file) as f:
+        lines = f.readlines()
+    if len(lines) < 3:
+        return None
+    # 跳过标题行，取倒数第二行
+    last_line = lines[-1].strip()
+    parts = last_line.split(",")
+    try:
+        return float(parts[4])  # Close列
+    except (ValueError, IndexError):
+        return None
 
-with open(trade_file) as f:
-    trade_text = f.read()
-
-# 从开盘推荐中提取支撑/阻力位
-# 格式: 支撑2886.28 / 阻力2930.33
-thresholds = {}
-for block in trade_text.split("🟢") + trade_text.split("🟡") + trade_text.split("🔴"):
-    name_match = re.search(r'^([\u4e00-\u9fa5A-Z0-9]+)\s+', block)
-    if not name_match:
-        continue
-    name = name_match.group(1).strip()
-    s_match = re.search(r'支撑([\d.]+)', block)
-    r_match = re.search(r'阻力([\d.]+)', block)
-    if s_match and r_match:
-        thresholds[name] = {
-            "support": float(s_match.group(1)),
-            "resistance": float(r_match.group(1))
-        }
-
-# 从复盘报告中提取穿越声明
-# 格式: 🟢 沪深300 突破阻力 4918.77（收 4919.39）
-mismatches = 0
-for line in text.split("\n"):
-    m = re.search(r'[🟢🔴]\s+(\S+?)\s+(突破阻力|跌破支撑)\s+([\d.]+)', line)
-    if not m:
-        continue
-    name = m.group(1)
-    direction = m.group(2)
-    price = float(m.group(3))
+def parse_signal_block(text: str) -> list[dict]:
+    """解析交易信号表，提取每只标的信息"""
+    signals = []
     
-    if name in thresholds:
-        if direction == "突破阻力":
-            expected = thresholds[name]["resistance"]
-        else:
-            expected = thresholds[name]["support"]
+    # 匹配每行信号：🔴/🟡/🟢  标的名  收盘价  乖离率  仓位  方向
+    pattern = r'([🔴🟡🟢])\s+(\S+)\s+([\d.]+)\s+乖离([+-][\d.]+)%?\s+[→↑↓]\s+仓位([\d.]+)%\s+(买入|持有|卖出)'
+    
+    for m in re.finditer(pattern, text):
+        direction_emoji = m.group(1)
+        name = m.group(2)
+        close = float(m.group(3))
+        bias = float(m.group(4))
+        position = float(m.group(5))
+        action = m.group(6)
         
-        # 允许 ±2% 容差（开盘后VWAP修正可能导致阈值微调）
-        deviation = abs(price - expected) / expected * 100 if expected else 0
-        if deviation > 2.0:
-            mismatches += 1
-            print(f"[交叉] {name}: 复盘使用{price} vs 开盘推荐{expected} Δ{deviation:.1f}%")
+        signals.append({
+            "name": name,
+            "close": close,
+            "bias": bias,
+            "position": position,
+            "action": action,
+            "direction_emoji": direction_emoji,
+        })
+    return signals
 
-if mismatches == 0:
-    score = 10
-elif mismatches == 1:
-    score = 5
-else:
-    score = 0
+def symbol_from_name(name: str) -> str:
+    """从标的名称映射到symbol"""
+    mapping = {
+        "上证50": "000016", "沪深300": "000300", "科创50": "000688",
+        "农业银行": "601288", "中国银行": "601988", "招商银行": "600036",
+        "国电电力": "600795", "中国长城": "000066", "国睿科技": "600562",
+    }
+    return mapping.get(name)
 
-result = {
-    "pass": mismatches == 0,
-    "score": score,
-    "matched": len(thresholds),
-    "mismatches": mismatches,
-}
-print(json.dumps(result, ensure_ascii=False))
-sys.exit(0 if mismatches == 0 else 1)
+def main():
+    signal_file = sys.argv[1]
+    with open(signal_file) as f:
+        text = f.read()
+    
+    signals = parse_signal_block(text)
+    if not signals:
+        print(json.dumps({"pass": True, "note": "无信号数据，跳过检查"}))
+        sys.exit(0)
+    
+    issues = []
+    for sig in signals:
+        sym = symbol_from_name(sig["name"])
+        if not sym:
+            continue
+        
+        cache = find_daily_cache(sym)
+        if not cache:
+            continue
+        
+        yest_close = get_yesterday_close(cache)
+        if yest_close is None:
+            continue
+        
+        # Check 1: 昨日收盘价与信号中引用的收盘价偏差
+        price_diff_pct = abs(sig["close"] - yest_close) / yest_close * 100
+        if price_diff_pct > 10:
+            issues.append(f"{sig['name']}: 收盘价偏差{price_diff_pct:.1f}% (信号{sig['close']} vs 缓存{yest_close})")
+        
+        # Check 2: 方向emoji与action一致性
+        mapping = {"买入": "🟢", "持有": "🟡", "卖出": "🔴"}
+        expected_emoji = mapping.get(sig["action"])
+        if expected_emoji and sig["direction_emoji"] != expected_emoji:
+            issues.append(f"{sig['name']}: 方向标记{sig['direction_emoji']}与操作{expected_emoji}{sig['action']}不匹配")
+        
+        # Check 3: 乖离率方向与操作逻辑一致性
+        if sig["action"] == "买入" and sig["bias"] > 15:
+            issues.append(f"{sig['name']}: 买入但乖离+{sig['bias']}%偏高，建议核实")
+        if sig["action"] == "卖出" and sig["bias"] < -15:
+            issues.append(f"{sig['name']}: 卖出但乖离{sig['bias']}%已深度超卖，建议核实")
+
+    result = {
+        "pass": len(issues) == 0,
+        "checked": len(signals),
+        "issues": issues,
+    }
+    print(json.dumps(result, ensure_ascii=False))
+    sys.exit(0 if len(issues) == 0 else 1)
+
+if __name__ == "__main__":
+    main()

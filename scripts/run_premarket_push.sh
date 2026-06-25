@@ -135,6 +135,23 @@ else
     echo "[3.5/5] Rubric质量评估... 跳过（脚本缺失）"
 fi
 
+# 步骤3.6: 前置一致性检查（昨日收盘 ↔ 今日信号）
+CONSISTENCY_SCRIPT="$PROJECT_DIR/rubrics/check_morning_consistency.py"
+if [ -f "$CONSISTENCY_SCRIPT" ] && [ -f "$TRADE_FILE" ]; then
+    echo "[3.6/5] 前置一致性检查..."
+    if python3 "$CONSISTENCY_SCRIPT" "$TRADE_FILE" 2>&1; then
+        echo "  ✅ 信号与昨日数据自洽"
+    else
+        CONSISTENCY_ISSUES=$(python3 "$CONSISTENCY_SCRIPT" "$TRADE_FILE" 2>&1 | python3 -c "import sys,json; d=json.load(sys.stdin); print(len(d.get('issues',[])))" 2>/dev/null || echo "?")
+        echo "  ⚠️ ${CONSISTENCY_ISSUES}项不一致（继续推送，附加标记）"
+        if [ "$RUBRIC_TAG" = "" ]; then
+            CONSISTENCY_WARN=true
+        fi
+    fi
+else
+    echo "[3.6/5] 前置一致性检查... 跳过"
+fi
+
 # 步骤4: 虚拟盘执行（基于今日交易推荐）
 echo "[4/5] 虚拟盘执行..."
 /usr/bin/python3 "$SCRIPT_DIR/paper_trading.py" execute "$DATE_STR" 2>&1 || echo "[WARN] 虚拟盘执行失败"
@@ -157,6 +174,10 @@ else
             RUBRIC_TAG="⚠️ 低置信度 "
         fi
     fi
+fi
+# 前置一致性标记
+if [ "${CONSISTENCY_WARN:-false}" = "true" ]; then
+    RUBRIC_TAG="${RUBRIC_TAG}📉数据偏差 "
 fi
 
 # 构建推送内容头部
