@@ -19,7 +19,7 @@ SYMBOLS = [
     ("600795.SH", "国电电力", "stock"),
     ("000066.SZ", "中国长城", "stock"),
     ("600562.SH", "国睿科技", "stock"),
-    ("562500.SH", "中证机器人", "stock"),
+    ("562500.SH", "机器人ETF", "stock"),
 ]
 
 # update_daily_cache 格式: ticker → sina_api_code
@@ -93,7 +93,7 @@ SYMBOL_SECTOR_MAP = {
     "国电电力": "801160",      # 公用事业
     "中国长城": "801750",      # 计算机
     "国睿科技": "801740",      # 国防军工
-    "中证机器人": "801890",    # 机械设备
+    "机器人ETF": "801890",    # 机械设备
 }
 
 # update_daily_cache push2his 兜底: ticker → eastmoney secid (market.code)

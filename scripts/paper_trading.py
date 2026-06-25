@@ -65,7 +65,7 @@ def _fetch_close_price(code: str, date_str: str) -> Optional[float]:
                         return price
         except Exception as e:
             print(f"  [ETF行情] {code} 腾讯拉取失败: {e}")
-        # fallback: 从快照查（中证机器人已经在快照里存了ETF价）
+        # fallback: 从快照查（机器人ETF已经在快照里存了价）
     date_tag = date_str.replace("-", "")
     snapshot_file = f"{PROJECT_DIR}/reports/close_snapshot_{date_tag}.json"
     if not os.path.exists(snapshot_file):
@@ -87,7 +87,7 @@ _CODE_NAME = {
     "sh000016": "上证50", "sh000300": "沪深300", "sh000688": "科创50", "sh588000": "科创50",
     "sh601288": "农业银行", "sh601988": "中国银行", "sh600036": "招商银行",
     "sh600795": "国电电力", "sz000066": "中国长城", "sh600562": "国睿科技",
-    "sh562500": "中证机器人",
+    "sh562500": "机器人ETF",
 }
 
 

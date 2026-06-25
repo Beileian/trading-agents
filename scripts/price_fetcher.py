@@ -44,7 +44,7 @@ WATCHLIST = {
     "sh600795": {"name": "国电电力",    "tencent": "sh600795", "east": "1.600795", "sina": "sh600795", "type": "stock"},
     "sz000066": {"name": "中国长城",    "tencent": "sz000066", "east": "0.000066", "sina": "sz000066", "type": "stock"},
     "sh600562": {"name": "国睿科技",    "tencent": "sh600562", "east": "1.600562", "sina": "sh600562", "type": "stock"},
-    "sh562500": {"name": "中证机器人",  "tencent": "sh562500", "east": "1.562500", "sina": "sh562500", "type": "stock"},
+    "sh562500": {"name": "机器人ETF",  "tencent": "sh562500", "east": "1.562500", "sina": "sh562500", "type": "stock"},
 }
 
 # ── 数据类 ──
