@@ -18,6 +18,7 @@ from datetime import datetime, timezone, timedelta
 TZ = timezone(timedelta(hours=8))
 PROJECT_DIR = "/root/.openclaw/workspace/projects/trading-agents"
 OVERSEAS_DIR = "/root/.openclaw/workspace/projects/overseas-morning-brief"
+OVERSEAS_SIGNAL_DIR = "/root/.openclaw/workspace/projects/trading-agents/reports"  # extract_signal.py 输出到金桥本地
 CHAT_ID = "cidY4mlx+J2kNFpTiWFgQ0gkg=="
 
 NOW = datetime.now(TZ)
@@ -353,21 +354,26 @@ def load_thresholds():
 
 def load_overseas_direction():
     """从外盘研判信号文件提取方向"""
-    overseas_file = f"{OVERSEAS_DIR}/reports/overseas_signal_{TODAY_DATE}.md"
-    if not os.path.exists(overseas_file):
-        return None
-
-    with open(overseas_file) as f:
-        text = f.read()
-
-    m = re.search(r"\*\*研判方向\*\*:\s*(.+?)(?:\s*\||\n)", text)
-    return m.group(1).strip() if m else None
+    # 双路径查找: 优先金桥本地 extract_signal.py 输出, fallback overseas 仓库
+    for base_dir in [OVERSEAS_SIGNAL_DIR, f"{OVERSEAS_DIR}/reports"]:
+        overseas_file = f"{base_dir}/overseas_signal_{TODAY_DATE}.md"
+        if os.path.exists(overseas_file):
+            with open(overseas_file) as f:
+                text = f.read()
+            m = re.search(r"\*\*研判方向\*\*:\s*(.+?)(?:\s*\||\n)", text)
+            return m.group(1).strip() if m else None
+    return None
 
 
 def load_overseas_confidence():
     """从外盘信号文件提取置信度"""
-    overseas_file = f"{OVERSEAS_DIR}/reports/overseas_signal_{TODAY_DATE}.md"
-    if not os.path.exists(overseas_file):
+    overseas_file = None
+    for base_dir in [OVERSEAS_SIGNAL_DIR, f"{OVERSEAS_DIR}/reports"]:
+        candidate = f"{base_dir}/overseas_signal_{TODAY_DATE}.md"
+        if os.path.exists(candidate):
+            overseas_file = candidate
+            break
+    if not overseas_file:
         return None
 
     with open(overseas_file) as f:
@@ -1249,9 +1255,12 @@ def build_report(prices, thresholds, overseas_dir, overseas_conf):
     # ═══ 4. 推荐方向 vs 实际收盘方向 ═══
     L.append("**④ 推荐方向 vs 实际收盘方向**")
     sell_wrong = []
-    mismatch_lines = []
     vwap_corrected = set()
-    pos_notes = {}
+    
+    # 表格格式
+    table_rows = []
+    table_rows.append("| 标的 | 推荐 | 收盘 | 判定 | 仓位 |")
+    table_rows.append("|------|------|------|------|------|")
     for name in ALL_NAMES:
         if name not in prices or name not in thresholds:
             continue
@@ -1261,28 +1270,25 @@ def build_report(prices, thresholds, overseas_dir, overseas_conf):
         chg = p["chg_pct"]
         rec_dir = {"sell": "卖出", "buy": "买入"}.get(op, "持有")
         if chg > 0.5:
-            act_dir = f"↑ {chg:+.1f}%"
+            act_cell = f"↑{chg:+.1f}%"
         elif chg < -0.5:
-            act_dir = f"↓ {chg:.1f}%"
+            act_cell = f"↓{chg:.1f}%"
         else:
-            act_dir = f"→ {chg:+.1f}%"
-        reason = "—"
+            act_cell = f"→{chg:+.1f}%"
+        verdict = ""
         if op == "sell" and chg > 0.5:
-            reason = "卖出偏早"
+            verdict = "⚠️卖出偏早"
             sell_wrong.append(f"{name} +{chg:.1f}%")
         elif op == "buy" and chg < -0.5:
-            reason = "买入偏早"
+            verdict = "⚠️买入偏早"
         elif op == "hold" and chg > 3:
-            reason = "持有偏保守"
+            verdict = "⚠️持有偏保守"
         elif op == "hold" and chg < -3:
-            reason = "未提示卖出"
-        emoji = "✅" if reason == "—" else "⚠️"
-        # P0: VWAP标注
-        t.get("support")
-        t.get("resistance")
+            verdict = "⚠️未提示卖出"
+        else:
+            verdict = "✅"
         if t.get("_vwap_corrected"):
             vwap_corrected.add(name)
-        # 仓位
         pos_raw = t.get("pos", "")
         if pos_raw != "" and pos_raw is not None:
             try:
@@ -1292,22 +1298,17 @@ def build_report(prices, thresholds, overseas_dir, overseas_conf):
                 pos_str = ""
         else:
             pos_str = ""
-        # 精简格式：每行独立，不用表格
-        line = f"{emoji} {name} 推荐{rec_dir} → 实际{act_dir}"
-        if reason != "—":
-            line += f" ({reason})"
-        if pos_str:
-            line += f" | 仓位{pos_str}"
-        mismatch_lines.append(line)
+        table_rows.append(f"| {name} | {rec_dir} | {act_cell} | {verdict} | {pos_str} |")
 
-    for ml in mismatch_lines:
-        L.append(ml)
+    for row in table_rows:
+        L.append(row)
     if vwap_corrected:
         L.append(f"\n> VWAP修正: {'，'.join(sorted(vwap_corrected))}，共{len(vwap_corrected)}只")
     L.append("")
     
     # ═══ 5. 价格穿越 ═══
     L.append("**⑤ 价格穿越**")
+    L.append("*超涨=收盘价突破阻力位的幅度 | 破位=收盘价跌破支撑位的幅度 | 基准=今早交易推荐中的支撑/阻力位*")
     breaches = check_breaches(prices, thresholds)
     if breaches:
         L.append(f"{len(breaches)} 条触发：")

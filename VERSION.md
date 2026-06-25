@@ -1,8 +1,10 @@
 #!/usr/bin/env python3
 """
-金桥量化交易推荐系统 v2.5.2
+金桥量化交易推荐系统 v2.5.4
 
 版本历史:
+  v2.5.3 (2026-06-25): 价格硬保护 — LLM幻觉偏差>1%强制校准
+  v2.5.2 (2026-06-25): 中证机器人→机器人ETF名称修正
   v2.5.1 (2026-06-24): Rubrics 评审体系升级 — 双套标准 + TimesFM时效性门禁
     - rubrics v3.2.0: 分析报告5维度(analysis_completeness + LLM×3 + data_timeliness)
     - rubrics v1.0.0: 信号格式4维度(schema + factual + timeliness + action_consistency)
