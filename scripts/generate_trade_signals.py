@@ -965,6 +965,7 @@ def main():
             'trend': trend, 'advice': advice, 'pos': pos,
             'trigger': tech_trigger, 'risk': risk_desc, 'catalyst': catalyst_desc,
             'reasoning': reasoning,
+            '_extracted_price': price,  # 保留原始提取值供价格校准
         })
 
     # ── 实时开盘价覆盖（v2.4.0）──
@@ -1029,6 +1030,34 @@ def main():
                 print(f"  [仓位调整] {r['name']}: {old_pos:.0f}%→{new_pos:.0f}% (温度:{total_signal})")
     if pos_adjustments:
         print(f"  共 {pos_adjustments} 只标的仓位调整")    
+
+    # ── 价格硬保护: 强制对齐实时行情（防止LLM幻觉/Cron环境旧数据污染）──
+    # 如果 record 中的价格与 real_opens 偏差 >1%，强制覆盖
+    for r in records:
+        for ticker, name in TICKERS:
+            if r["name"] == name:
+                # 获取权威价格: 优先实时开盘价 > 技术分析最新价 > 日线缓存昨收
+                authoritative_price = None
+                if ticker in real_opens:
+                    authoritative_price = real_opens[ticker]['price']
+                else:
+                    try:
+                        authoritative_price = float(r.get('_extracted_price', 0)) if r.get('_extracted_price') else None
+                    except (ValueError, TypeError):
+                        pass
+                
+                if authoritative_price and r['price'] and r['price'] != '-':
+                    try:
+                        displayed = float(r['price'])
+                        dev = abs(displayed - authoritative_price) / authoritative_price * 100
+                        if dev > 1.0:
+                            print(f"  [价格校准] {name}: {r['price']}→{authoritative_price:.2f} (偏差{dev:.1f}%>1%)")
+                            r['price'] = f"{authoritative_price:.2f}"
+                    except (ValueError, TypeError):
+                        pass
+                elif authoritative_price and (not r['price'] or r['price'] == '-'):
+                    r['price'] = f"{authoritative_price:.2f}"
+                break
 
     # ── Schema 校验 ──
     passed, errors = validate_records(records)
