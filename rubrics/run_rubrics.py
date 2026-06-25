@@ -312,7 +312,7 @@ def main():
             if "exit_code" in res:
                 detail = res.get("result", {}).get("errors", ["unknown"])[0]
                 print(f"    ↳ {detail}", file=sys.stderr)
-            elif "llm_output" in res:
+            elif "llm_output" in res and res["llm_output"]:
                 out = res["llm_output"]
                 print(f"    ↳ LLM: {out[:80]}", file=sys.stderr)
 

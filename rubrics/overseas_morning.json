@@ -1,0 +1,59 @@
+{
+  "name": "外盘晨间研判质量",
+  "description": "对 generate_and_push.py 输出的 morning_brief_*.md 的结构与内容质量评估",
+  "version": "1.0.0",
+  "created": "2026-06-26",
+  "aggregation": "normalized_weighted_average",
+  "score_range": "0-10",
+  "items": [
+    {
+      "id": "schema_validity",
+      "description": "输出格式合法：包含【外盘晨间研判 — YYYY-MM-DD】标题、至少1条编号信号、📊综合研判、⚠️风险提示",
+      "rationale": "缺章漏节无法传递完整信息",
+      "weight": "veto",
+      "judge": "script",
+      "script": "rubrics/check_overseas_schema.py",
+      "pass_condition": "exit code 0",
+      "fail_action": "reject_and_retry",
+      "normalized_score_rule": "pass=10, fail=0"
+    },
+    {
+      "id": "data_accuracy",
+      "description": "引用的美股三大指数收盘价、涨跌幅、VIX、KWEB价格与prompt源数据一致",
+      "rationale": "数字是外盘分析的基石，错一字毁全局",
+      "weight": "high",
+      "judge": "script",
+      "script": "rubrics/check_overseas_factual.py",
+      "pass_condition": "所有引用数字与prompt源偏差 < 5%",
+      "fail_action": "mark_low_confidence",
+      "normalized_score_rule": "全通过=10, 每个错误扣2分"
+    },
+    {
+      "id": "signal_coherence",
+      "description": "每条信号结论和细分项的方向判断自洽（如纳指大跌但信号说科技情绪乐观=fail）",
+      "rationale": "LLM间歇性地在细分项和数据解读间自相矛盾",
+      "weight": "high",
+      "judge": "llm",
+      "prompt": "请以0-10分评分以下外盘晨间研判的信号自洽性：\n\n评估每个信号中细分项（正相关/负相关/情绪信号）是否与整体结论方向一致。\n\n0-3分：多数信号细分项与结论矛盾\n4-6分：部分信号的方向判断自相矛盾\n7-8分：方向基本一致，个别牵强\n9-10分：所有信号方向自洽，逻辑链完整\n\n输出格式：仅输出一个数字，如 8。不要输出理由。",
+      "pass_condition": "分数 >= 7",
+      "fail_action": "reject_and_retry",
+      "normalized_score_rule": "LLM直接输出0-10分"
+    },
+    {
+      "id": "conclusion_quality",
+      "description": "综合研判包含方向判断（偏多/偏空/中性）和置信度标注",
+      "rationale": "没有方向判断的研判等于没研判",
+      "weight": "medium",
+      "judge": "llm",
+      "prompt": "请以0-10分评分以下外盘晨间研判的综合研判质量：\n\n评估综合研判是否明确给出了方向判断（偏多/偏空/中性震荡）和置信度。\n\n0-3分：无方向判断或纯数据罗列\n4-6分：有方向但模糊，无置信度\n7-8分：方向明确但置信度支撑不够\n9-10分：方向明确+置信度理由充分\n\n输出格式：仅输出一个数字，如 7。不要输出理由。",
+      "pass_condition": "分数 >= 6",
+      "fail_action": "mark_low_confidence",
+      "normalized_score_rule": "LLM直接输出0-10分"
+    }
+  ],
+  "thresholds": {
+    "low_confidence": "任一 high 项得分 < 6 或总分 < 6.0",
+    "reject": "veto 项未通过(schema=0) 或 signal_coherence < 7"
+  },
+  "log": "rubrics/rubric_log.jsonl"
+}
