@@ -106,9 +106,54 @@ def load_thresholds():
     return thresholds
 
 def fetch_sina_prices():
-    """从多数据源获取实时价格。指数用东方财富（字段明确），个股用新浪（免费无限额）。"""
+    """从多数据源获取实时价格。指数优先东方财富(本地→VPS)，个股用新浪。"""
     prices = {}
     sina_codes = list(SINA_MAP.keys())
+
+    # ── VPS代理拉取东方财富（硅谷IP不被阻断）──
+    def _east_via_vps(east_codes: list) -> dict:
+        """通过SSH到硅谷VPS拉取东方财富数据"""
+        import subprocess
+        result = {}
+        try:
+            codes_json = json.dumps(east_codes)
+            vps_script = '''
+import urllib.request, json, sys
+east_codes = json.loads(sys.argv[1])
+results = {}
+for ec in east_codes:
+    if not ec:
+        continue
+    url = "https://push2.eastmoney.com/api/qt/stock/get?secid=" + ec + "&fields=f43,f44,f45,f46,f47,f57,f58,f60,f170"
+    req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"})
+    try:
+        resp = urllib.request.urlopen(req, timeout=5)
+        data = json.loads(resp.read())
+        if data.get("data"):
+            dd = data["data"]
+            results[dd.get("f57", ec)] = {
+                "price": dd.get("f43", 0) / 100 if dd.get("f43") else None,
+                "high": dd.get("f44", 0) / 100 if dd.get("f44") else None,
+                "low": dd.get("f45", 0) / 100 if dd.get("f45") else None,
+                "open": dd.get("f46", 0) / 100 if dd.get("f46") else None,
+                "prev_close": dd.get("f60", 0) / 100 if dd.get("f60") else None,
+                "volume": dd.get("f47", 0),
+                "change_pct": dd.get("f170", 0) / 100 if dd.get("f170") else None,
+            }
+    except Exception:
+        continue
+print(json.dumps(results, ensure_ascii=False))
+'''
+            proc = subprocess.run(
+                ["ssh", "-o", "ConnectTimeout=5", "-o", "StrictHostKeyChecking=no",
+                 "root@49.51.33.96", "python3", "-c", vps_script, codes_json],
+                capture_output=True, text=True, timeout=15
+            )
+            if proc.returncode == 0 and proc.stdout.strip():
+                result = json.loads(proc.stdout.strip())
+        except Exception as e:
+            print(f"[eastmoney VPS] SSH fallback failed: {e}", file=sys.stderr)
+        return result
 
     # ── 批量取东方财富实时行情（用于指数+个股双校验） ──
     east_codes = []
@@ -151,6 +196,16 @@ def fetch_sina_prices():
                 continue
     except Exception as e:
         print(f"[eastmoney error] {e}", file=sys.stderr)
+
+    # ── 东方财富 VPS代理（硅谷IP不被阻断）──
+    if not east_prices and any(ec for ec in east_codes if ec):
+        try:
+            vps_data = _east_via_vps(east_codes)
+            if vps_data:
+                east_prices.update(vps_data)
+                print(f"[eastmoney VPS] 获取{len(vps_data)}只标的实时数据", file=sys.stderr)
+        except Exception as ve:
+            print(f"[eastmoney VPS] 代理失败: {ve}", file=sys.stderr)
 
     # ── 新浪个股数据 ──
     for i in range(0, len(sina_codes), 3):

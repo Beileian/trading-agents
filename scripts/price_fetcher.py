@@ -139,6 +139,50 @@ class PriceFetcher:
                     }
             except Exception:
                 pass  # 东方财富限流常见，不报错
+
+        # VPS fallback: 硅谷IP不被东方财富阻断
+        if not results:
+            try:
+                import subprocess
+                ec_list = [cfg["east"] for cfg in WATCHLIST.values() if cfg.get("east")]
+                if ec_list:
+                    codes_json = json.dumps(ec_list)
+                    vps_script = '''
+import urllib.request, json, sys
+east_codes = json.loads(sys.argv[1])
+results = {}
+for ec in east_codes:
+    url = "https://push2.eastmoney.com/api/qt/stock/get?secid=" + ec + "&fields=f43,f44,f45,f46,f47,f57,f58,f60,f170"
+    req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"})
+    try:
+        resp = urllib.request.urlopen(req, timeout=5)
+        data = json.loads(resp.read())
+        if data.get("data"):
+            dd = data["data"]
+            results[dd.get("f57", ec)] = {
+                "price": dd.get("f43", 0) / 100 if dd.get("f43") else None,
+                "high": dd.get("f44", 0) / 100 if dd.get("f44") else None,
+                "low": dd.get("f45", 0) / 100 if dd.get("f45") else None,
+                "open": dd.get("f46", 0) / 100 if dd.get("f46") else None,
+                "prev_close": dd.get("f60", 0) / 100 if dd.get("f60") else None,
+                "change_pct": dd.get("f170", 0) / 100 if dd.get("f170") else None,
+            }
+    except Exception:
+        continue
+print(json.dumps(results, ensure_ascii=False))
+'''
+                    proc = subprocess.run(
+                        ["ssh", "-o", "ConnectTimeout=5", "-o", "StrictHostKeyChecking=no",
+                         "root@49.51.33.96", "python3", "-c", vps_script, codes_json],
+                        capture_output=True, text=True, timeout=15
+                    )
+                    if proc.returncode == 0 and proc.stdout.strip():
+                        vps_data = json.loads(proc.stdout.strip())
+                        results.update(vps_data)
+                        print(f"[eastmoney VPS] 获取{len(vps_data)}只实时数据")
+            except Exception as e:
+                print(f"[eastmoney VPS] 失败: {e}")
+        return results
         return results
 
     # ═══ 新浪财经（仅个股，指数不可靠） ═══
