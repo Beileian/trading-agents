@@ -187,12 +187,18 @@ def fetch_sina_prices():
                     change_pct = east_data['change_pct']
                     volume = east_data['volume']
                 elif is_index:
-                    # 东方财富不可用，新浪fallback: fields[1]=今开, fields[2]=昨收
+                    # 东方财富不可用，新浪fallback
+                    # 新浪指数：fields[1]=今开, fields[2]=昨收, fields[3]=当前价, fields[4]=最高, fields[5]=最低
                     open_price = float(fields[1])
                     prev_close = float(fields[2])
-                    price = open_price  # ⚠️ 新浪指数无实时价，仅标记
-                    high = float(fields[4]) if fields[4] else open_price
-                    low = float(fields[5]) if fields[5] else open_price
+                    # fields[3]在交易时段是实时价(2026-06-26实测: 4894.09)
+                    current = float(fields[3]) if fields[3] and fields[3] != '0.000' else None
+                    if current and current > 0:
+                        price = current
+                    else:
+                        price = open_price  # 非交易时段fallback
+                    high = float(fields[4]) if fields[4] else price
+                    low = float(fields[5]) if fields[5] else price
                     change_pct = (price - prev_close) / prev_close * 100 if prev_close else 0
                     volume = float(fields[8]) if fields[8] else 0
                 else:
