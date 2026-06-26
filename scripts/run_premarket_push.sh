@@ -241,7 +241,8 @@ for sec_name, articles in sections.items():
 fi
 
 echo "" >> "$PUSH_FILE"
-echo "> *外盘信号已在8:05推送，收盘复盘将于15:30自动验证今日判断。AI辅助分析，不构成投资建议*" >> "$PUSH_FILE"
+GIT_VER=$(cd "$PROJECT_DIR" && git log -1 --format='%h %s' 2>/dev/null | head -c 80 || echo "v?")
+echo "> *${GIT_VER} | 外盘信号已在8:05推送，收盘复盘将于15:30自动验证。AI辅助分析，不构成投资建议*" >> "$PUSH_FILE"
 
 if [ "$HAS_CONTENT" = true ]; then
     echo "推送内容已就绪，推送到钉钉群..."
