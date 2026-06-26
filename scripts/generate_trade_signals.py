@@ -87,15 +87,31 @@ PREMARKET_TENCENT = {
     "600562.SH": ("国睿科技", "sh600562"),
 }
 
+def _load_close_snapshot() -> dict:
+    """加载本地收盘快照（close_snapshot_YYYYMMDD.json），返回 {name: price}"""
+    try:
+        date_tag = datetime.now(TZ).strftime("%Y%m%d")
+        # 优先当日，兜底前日
+        for tag in [date_tag, (datetime.now(TZ) - timedelta(days=1)).strftime("%Y%m%d")]:
+            fpath = os.path.join(os.path.dirname(__file__), "..", "reports", f"close_snapshot_{tag}.json")
+            if os.path.exists(fpath):
+                with open(fpath) as f:
+                    return json.load(f)
+    except Exception:
+        pass
+    return {}
+
 def fetch_real_open_prices():
     """
-    从腾讯+新浪拉取今日开盘价，三重保障：
+    从腾讯+新浪拉取今日开盘价，四重保障：
     ① 腾讯实时行情（主源）
     ② 新浪实时行情（交叉校验）
-    ③ 昨收 fallback（网络异常时）
+    ③ 本地收盘快照 close_snapshot_{date}.json（当日/昨日）
+    ④ 腾讯/新浪 prev_close fallback（网络异常时）
     """
     import requests
     today_str = datetime.now(TZ).strftime("%Y-%m-%d")
+    snapshot = _load_close_snapshot()
     result = {}
 
     # 腾讯批量拉取
@@ -184,7 +200,13 @@ def fetch_real_open_prices():
                     print(f"[开盘价交叉] {name}: 腾讯={open_price:.2f} vs 新浪={sina['open']:.2f} Δ{deviation:.2f}%，保留腾讯")
                     source = "tencent:cross"
 
-        # ③ fallback 到昨收
+        # ③ fallback 到本地收盘快照（最可靠）
+        if open_price is None and name in snapshot:
+            open_price = snapshot[name]
+            source = "snapshot"
+            print(f"[开盘价] {name}: fallback到本地快照{open_price:.2f}")
+        
+        # ④ 兜底 fallback 到腾讯/新浪 prev_close
         if open_price is None:
             open_price = tc.get("prev_close") or sina.get("prev_close")
             if open_price:
