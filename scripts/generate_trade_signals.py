@@ -877,21 +877,56 @@ def build_synthesis_paragraph(mkt_temp, overseas_text, records):
         except (json.JSONDecodeError, KeyError):
             pass
 
+    # ── P0: 读取 A 股近期实际方向（来自上一个交易日收盘复盘） ──
+    a_share_recent_direction = None  # 'bearish' | 'bullish' | None
+    if os.path.exists(state_file):
+        try:
+            with open(state_file) as f:
+                s = json.load(f)
+            lr = s.get('last_review', {})
+            ad = lr.get('a_share_actual_direction', '')
+            if '偏空' in ad:
+                a_share_recent_direction = 'bearish'
+            elif '偏多' in ad:
+                a_share_recent_direction = 'bullish'
+        except (json.JSONDecodeError, KeyError):
+            pass
+
     # ── 合成规则 ──
-    # Rule 1: 温度偏热 + 外盘偏空
-    if temp_direction == 'warm' and overseas_direction == -1:
-        lines.append("温度偏热但外盘偏空，短期谨慎，估值偏贵但情绪支撑")
-    # Rule 2: 温度偏冷 + 多数个股 TimesFM P10 附近
-    elif temp_direction == 'cold' and (timesfm_p10_minus >= timesfm_total * 0.5 if timesfm_total else False):
-        lines.append("估值便宜但趋势未确认，关注企稳信号")
-    # Rule 3: 温度偏热 + 多数个股 P90 以上
-    elif temp_direction == 'warm' and (timesfm_p90_plus >= timesfm_total * 0.5 if timesfm_total else False):
-        lines.append("警惕情绪透支，多数标的处于预测上沿，注意仓位风险")
-    # Rule 4: 波动率切换告警
-    elif regime_alerts:
-        for a in regime_alerts[:1]:
-            sym = a.get('symbol', '某标的')
-            lines.append(f"{sym}波动结构变化，历史回测参考价值降低")
+    # Rule 0: 逆向+冲突检测（P0新增）—— 外盘方向与A股近期趋势相反且内外盘撕裂
+    # 此时外盘带头逆向，是转折拐点的高价值信号，应跟随外盘方向
+    triggered_rule0 = False
+    if overseas_direction != 0 and a_share_recent_direction:
+        a_is_bearish = a_share_recent_direction == 'bearish'
+        a_is_bullish = a_share_recent_direction == 'bullish'
+        overseas_is_bull = overseas_direction == 1
+        overseas_is_bear = overseas_direction == -1
+        # 逆向：外盘方向与 A 股近期趋势相反
+        is_contrarian = (overseas_is_bear and a_is_bullish) or (overseas_is_bull and a_is_bearish)
+        # 冲突：温度计与外盘方向不一致
+        temp_bull = temp_direction == 'warm'
+        temp_bear = temp_direction == 'cold'
+        is_conflicting = (overseas_is_bear and temp_bull) or (overseas_is_bull and temp_bear) or temp_direction in (None, 'neutral')
+        if is_contrarian and is_conflicting:
+            direction_label = '偏空' if overseas_is_bear else '偏多'
+            lines.append(f"逆向信号+冲突共振：外盘{direction_label}且与A股近期趋势（{a_share_recent_direction}）背离，外盘信号上调为高置信，跟随外盘方向")
+            triggered_rule0 = True
+
+    if not triggered_rule0:
+        # Rule 1: 温度偏热 + 外盘偏空
+        if temp_direction == 'warm' and overseas_direction == -1:
+            lines.append("温度偏热但外盘偏空，短期谨慎，估值偏贵但情绪支撑")
+        # Rule 2: 温度偏冷 + 多数个股 TimesFM P10 附近
+        elif temp_direction == 'cold' and (timesfm_p10_minus >= timesfm_total * 0.5 if timesfm_total else False):
+            lines.append("估值便宜但趋势未确认，关注企稳信号")
+        # Rule 3: 温度偏热 + 多数个股 P90 以上
+        elif temp_direction == 'warm' and (timesfm_p90_plus >= timesfm_total * 0.5 if timesfm_total else False):
+            lines.append("警惕情绪透支，多数标的处于预测上沿，注意仓位风险")
+        # Rule 4: 波动率切换告警
+        elif regime_alerts:
+            for a in regime_alerts[:1]:
+                sym = a.get('symbol', '某标的')
+                lines.append(f"{sym}波动结构变化，历史回测参考价值降低")
 
     # 默认：方向一致性
     if not lines:

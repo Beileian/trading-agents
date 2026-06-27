@@ -626,11 +626,19 @@ def update_cognition_state(prices, thresholds, overseas_dir, overseas_conf, regi
     # ── 1. Overseas direction match ──
     overseas_match = None
     overseas_actual = None
+    a_share_direction = None
+    # 先算A股实际方向（三大指数平均）
+    idx_pcts = [prices[n]["chg_pct"] for n in ["上证50", "沪深300", "科创50"] if n in prices]
+    avg_idx = sum(idx_pcts) / len(idx_pcts) if idx_pcts else 0
+    if avg_idx < -0.5:
+        a_share_direction = "偏空"
+    elif avg_idx > 0.5:
+        a_share_direction = "偏多"
+    else:
+        a_share_direction = "震荡"
     if overseas_dir:
         bearish = "偏空" in overseas_dir
         bullish = "偏多" in overseas_dir
-        idx_pcts = [prices[n]["chg_pct"] for n in ["上证50", "沪深300", "科创50"] if n in prices]
-        avg_idx = sum(idx_pcts) / len(idx_pcts) if idx_pcts else 0
         if avg_idx < -0.5:
             overseas_actual = "偏空"
         elif avg_idx > 0.5:
@@ -735,6 +743,7 @@ def update_cognition_state(prices, thresholds, overseas_dir, overseas_conf, regi
         "overseas_predicted": overseas_dir,
         "overseas_actual": overseas_actual,
         "direction_match": overseas_match,
+        "a_share_actual_direction": a_share_direction,
         "sell_wrong_count": len(sell_wrong),
         "sell_wrong_names": sell_wrong,
         "breach_count": breach_count,
