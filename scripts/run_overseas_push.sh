@@ -54,6 +54,16 @@ echo "# 隔夜外盘信号 · $DATE_STR" | python3 "$PUSH_SCRIPT"
 sed '/^## /d' "$SIGNAL_FILE" \
   | sed 's/🌐//g; s/📊//g; s/📰//g; s/💡//g; s/🔥//g; s/⭐//g; s/⚠️//g; s/🎯//g; s/🧘//g' \
   | python3 "$PUSH_SCRIPT"
-echo "> *交易推荐+技术分析将于8:55推送。AI辅助分析，不构成投资建议*" | python3 "$PUSH_SCRIPT"
+# 版本号脚注
+GIT_TAG=$(cd "$PROJECT_DIR" && git describe --tags --abbrev=7 2>/dev/null || true)
+GIT_HASH=$(cd "$PROJECT_DIR" && git log -1 --format='%h' 2>/dev/null || echo "?")
+if [ -n "$GIT_TAG" ]; then
+    GIT_VER="${GIT_TAG}@${GIT_HASH}"
+else
+    echo "[WARN] git tag 缺失" >&2
+    VER_FROM_FILE=$(grep -oP '\d+\.\d+\.\d+' "$PROJECT_DIR/VERSION.md" 2>/dev/null | head -1 || echo "unknown")
+    GIT_VER="v${VER_FROM_FILE}@${GIT_HASH}"
+fi
+echo "> *${GIT_VER} | 交易推荐+技术分析将于8:55推送。AI辅助分析，不构成投资建议*" | python3 "$PUSH_SCRIPT"
 
 echo "=== 完成 ==="

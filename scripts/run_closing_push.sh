@@ -75,4 +75,25 @@ else
 EOF
 fi
 
+# 自动对齐 git tag：收盘复盘产出后打tag推送
+# 仅在复盘报告成功生成时执行（降级简报跳过）
+if [ -f "$REVIEW_FILE" ] && [ -s "$REVIEW_FILE" ]; then
+    echo "  同步 git tag..."
+    cd "$PROJECT_DIR"
+    VER=$(grep -oP '\d+\.\d+\.\d+' VERSION.md 2>/dev/null | head -1 || true)
+    if [ -n "$VER" ]; then
+        TAG="v${VER}"
+        # 检查 tag 是否已存在、是否指向最新 commit
+        EXISTING_COMMIT=$(git rev-list -n 1 "$TAG" 2>/dev/null || true)
+        CURRENT_COMMIT=$(git rev-parse HEAD)
+        if [ "$EXISTING_COMMIT" != "$CURRENT_COMMIT" ]; then
+            git tag -f "$TAG" && git push origin "$TAG" --force 2>/dev/null && echo "  ✅ tag $TAG 已对齐到 $(git rev-parse --short HEAD)" || echo "  [WARN] tag推送失败"
+        else
+            echo "  ✅ tag $TAG 已是最新，跳过"
+        fi
+    else
+        echo "  [WARN] VERSION.md 中未找到版本号，跳过自动tag"
+    fi
+fi
+
 echo "=== 完成 ==="

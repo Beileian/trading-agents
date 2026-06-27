@@ -241,7 +241,17 @@ for sec_name, articles in sections.items():
 fi
 
 echo "" >> "$PUSH_FILE"
-GIT_VER=$(cd "$PROJECT_DIR" && git log -1 --format='%h %s' 2>/dev/null | head -c 80 || echo "v?")
+# 版本号：优先 git describe --tags，失败则用 VERSION.md，再失败则标记 unknown
+GIT_TAG=$(cd "$PROJECT_DIR" && git describe --tags --abbrev=7 2>/dev/null || true)
+GIT_HASH=$(cd "$PROJECT_DIR" && git log -1 --format='%h' 2>/dev/null || echo "?")
+if [ -n "$GIT_TAG" ]; then
+    GIT_VER="${GIT_TAG}@${GIT_HASH}"
+else
+    # 查不到 tag → unknown + 告警
+    echo "[WARN] git tag 缺失，请检查 VERSION.md 并打 tag" >&2
+    VER_FROM_FILE=$(grep -oP '\d+\.\d+\.\d+' "$PROJECT_DIR/VERSION.md" 2>/dev/null | head -1 || echo "unknown")
+    GIT_VER="v${VER_FROM_FILE}@${GIT_HASH}"
+fi
 echo "> *${GIT_VER} | 外盘信号已在8:05推送，收盘复盘将于15:30自动验证。AI辅助分析，不构成投资建议*" >> "$PUSH_FILE"
 
 if [ "$HAS_CONTENT" = true ]; then
@@ -249,6 +259,16 @@ if [ "$HAS_CONTENT" = true ]; then
     cat "$PUSH_FILE" | python3 "$PUSH_SCRIPT"
 else
     echo "无可用内容，跳过推送"
+fi
+
+# 自动对齐 git tag（保险：即使收盘复盘漏了，开盘推送也打tag）
+cd "$PROJECT_DIR"
+VER=$(grep -oP '\d+\.\d+\.\d+' VERSION.md 2>/dev/null | head -1 || true)
+if [ -n "$VER" ]; then
+    TAG="v${VER}"
+    if ! git rev-parse "$TAG" >/dev/null 2>&1 || [ "$(git rev-list -n 1 "$TAG" 2>/dev/null)" != "$(git rev-parse HEAD)" ]; then
+        git tag -f "$TAG" && git push origin "$TAG" --force 2>/dev/null || true
+    fi
 fi
 
 echo "=== 完成 ==="
