@@ -1,0 +1,167 @@
+{
+  "date": "2026-06-27",
+  "generated_at": "2026-06-27T23:21:55.908703",
+  "proposals": [
+    {
+      "type": "weight_adjustment",
+      "item_id": "logic_completeness",
+      "reason": "logic_completeness 近31次平均分 4.94，趋势 stable_low",
+      "suggestion": "increase_weight",
+      "details": {
+        "item_id": "logic_completeness",
+        "avg_score": 4.94,
+        "samples": 31,
+        "trend": "stable_low",
+        "recent_scores": [
+          8,
+          8,
+          8,
+          8,
+          8
+        ]
+      }
+    },
+    {
+      "type": "weight_adjustment",
+      "item_id": "risk_specificity",
+      "reason": "risk_specificity 近31次平均分 5.1，趋势 stable_low",
+      "suggestion": "increase_weight",
+      "details": {
+        "item_id": "risk_specificity",
+        "avg_score": 5.1,
+        "samples": 31,
+        "trend": "stable_low",
+        "recent_scores": [
+          8,
+          8,
+          8,
+          8,
+          8
+        ]
+      }
+    },
+    {
+      "type": "weight_adjustment",
+      "item_id": "action_consistency",
+      "reason": "action_consistency 近35次平均分 5.86，趋势 stable_low",
+      "suggestion": "increase_weight",
+      "details": {
+        "item_id": "action_consistency",
+        "avg_score": 5.86,
+        "samples": 35,
+        "trend": "stable_low",
+        "recent_scores": [
+          3,
+          8,
+          8,
+          8,
+          3
+        ]
+      }
+    },
+    {
+      "type": "weight_adjustment",
+      "item_id": "insight_depth",
+      "reason": "insight_depth 近6次平均分 3.83，趋势 declining",
+      "suggestion": "increase_weight",
+      "details": {
+        "item_id": "insight_depth",
+        "avg_score": 3.83,
+        "samples": 6,
+        "trend": "declining",
+        "recent_scores": [
+          3,
+          8,
+          3,
+          3,
+          3
+        ]
+      }
+    },
+    {
+      "type": "weight_adjustment",
+      "item_id": "data_timeliness",
+      "reason": "data_timeliness 近10次平均分 4.0，趋势 stable_low",
+      "suggestion": "increase_weight",
+      "details": {
+        "item_id": "data_timeliness",
+        "avg_score": 4.0,
+        "samples": 10,
+        "trend": "stable_low",
+        "recent_scores": [
+          3,
+          3,
+          3,
+          8,
+          8
+        ]
+      }
+    },
+    {
+      "type": "threshold_tuning",
+      "item_id": "schema_validity",
+      "reason": "threshold_too_tight：当前 pass≥7，建议调整为 ≥6",
+      "suggestion": {
+        "item_id": "schema_validity",
+        "issue": "threshold_too_tight",
+        "current_pass": 7,
+        "suggested_pass": 6,
+        "avg_reject_score": 6.53,
+        "reject_rate": "52%"
+      }
+    },
+    {
+      "type": "threshold_tuning",
+      "item_id": "factual_accuracy",
+      "reason": "threshold_too_tight：当前 pass≥7，建议调整为 ≥6",
+      "suggestion": {
+        "item_id": "factual_accuracy",
+        "issue": "threshold_too_tight",
+        "current_pass": 7,
+        "suggested_pass": 6,
+        "avg_reject_score": 6.82,
+        "reject_rate": "55%"
+      }
+    },
+    {
+      "type": "threshold_tuning",
+      "item_id": "data_completeness",
+      "reason": "threshold_too_loose：当前 pass≥7，建议调整为 ≥8",
+      "suggestion": {
+        "item_id": "data_completeness",
+        "issue": "threshold_too_loose",
+        "current_pass": 7,
+        "suggested_pass": 8,
+        "avg_score": 8.0,
+        "note": "持续通过但无区分度，提高阈值增加挑战性"
+      }
+    },
+    {
+      "type": "threshold_tuning",
+      "item_id": "data_accuracy",
+      "reason": "threshold_too_loose：当前 pass≥7，建议调整为 ≥8",
+      "suggestion": {
+        "item_id": "data_accuracy",
+        "issue": "threshold_too_loose",
+        "current_pass": 7,
+        "suggested_pass": 8,
+        "avg_score": 8.0,
+        "note": "持续通过但无区分度，提高阈值增加挑战性"
+      }
+    },
+    {
+      "type": "threshold_tuning",
+      "item_id": "consistency_with_morning",
+      "reason": "threshold_too_loose：当前 pass≥7，建议调整为 ≥8",
+      "suggestion": {
+        "item_id": "consistency_with_morning",
+        "issue": "threshold_too_loose",
+        "current_pass": 7,
+        "suggested_pass": 8,
+        "avg_score": 8.0,
+        "note": "持续通过但无区分度，提高阈值增加挑战性"
+      }
+    }
+  ],
+  "total_entries_analyzed": 43
+}
