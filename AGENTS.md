@@ -26,6 +26,10 @@
 - 外盘研判 06:30，开盘前分析 08:00
 - rubric retry 不与推送时间冲突——低置信度标记继续推送，修正版后补
 - 所有推送脚注必须包含版本号+commit hash
+- 版本号取自 `VERSION.md`，每次功能性 commit 提交时同步更新版本号
+- 每个交易日收盘复盘产出后，自动打 git tag 对齐 VERSION.md 并 push：
+  `git tag v$(grep -oP '\d+\.\d+\.\d+' VERSION.md | head -1) && git push --tags`
+- unknown 版本号当日必须追查修复，不得过夜
 
 ---
 
@@ -70,4 +74,4 @@
 
 ---
 
-*金桥项目 AGENTS.md v1.0.0 | 2026-06-26 创建*
+*金桥项目 AGENTS.md v1.0.1 | 2026-06-27 补版本号对齐规则*
