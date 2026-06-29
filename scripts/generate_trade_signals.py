@@ -1,14 +1,16 @@
 #!/usr/bin/env python3
 """
-托董交易推荐系统 v2.4.0 — Schema校验 + 自动重试 + 实时开盘价
+托董交易推荐系统 v2.5.0 — Schema校验 + Rubrics规则门控 + 自动重试 + 实时开盘价
 
+v2.5.0: Rubrics规则门控 — script类评估项嵌入retry loop，低于阈值触发重试
 v2.4.0: 实时开盘价三重保障 — 腾讯时间戳校验 + 新浪交叉 + 昨收fallback
 v2.3.0: Schema校验 + 自动重试（Harness第一步）
 乖离率体系: BIAS_20 判断偏离 → 5日趋势方向 → 修正支撑/阻力触发逻辑
 原则: 支撑≠买进, 阻力≠卖出。乖离率告诉你"车开多快"。
 """
 
-import sys, os, re, json, pandas as pd
+import sys, os, re, json, csv, glob, subprocess
+import pandas as pd
 from datetime import datetime, timezone, timedelta
 
 TZ = timezone(timedelta(hours=8))
@@ -805,6 +807,122 @@ def validate_records(records: list) -> tuple[bool, list[str]]:
     return len(errors) == 0, errors
 
 
+# ═══ Rubrics 规则门控（v2.5.0）═══
+# 只跑 script 类评估项（确定性，无需 LLM）
+# LLM 类评估项由 run_rubrics.py 在推送前独立执行
+
+RUBRIC_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "rubrics")
+
+# 门控阈值（保守初始值，7月初数据积累后精调）
+RUBRIC_GATE = {
+    "reject_score": 5.0,      # 总分 < 此值 → reject
+    "veto_reject": True,       # veto 项不通过 → reject
+    "low_confidence_score": 6.0,  # 总分 < 此值 → low_confidence
+    "weights": {"veto": 0.30, "high": 0.25, "medium": 0.15},
+}
+
+
+def _run_script_item(script_relpath: str, report_file: str, cwd: str | None = None) -> dict:
+    """运行单个 script 类 rubrics item，返回 {pass, score, errors, stderr}"""
+    script_abs = os.path.join(PROJECT_DIR, script_relpath) if not os.path.isabs(script_relpath) else script_relpath
+    if not os.path.exists(script_abs):
+        return {"pass": False, "score": 0, "errors": [f"脚本不存在: {script_relpath}"], "stderr": ""}
+    try:
+        proc = subprocess.run(
+            [sys.executable, script_abs, report_file],
+            capture_output=True, text=True, timeout=30,
+            cwd=cwd or PROJECT_DIR
+        )
+        try:
+            result = json.loads(proc.stdout.strip())
+        except json.JSONDecodeError:
+            result = {"raw": proc.stdout.strip()}
+        return {
+            "pass": proc.returncode == 0,
+            "score": result.get("score", 10 if proc.returncode == 0 else 0),
+            "errors": result.get("errors", []),
+            "exit_code": proc.returncode,
+            "stderr": proc.stderr.strip(),
+        }
+    except subprocess.TimeoutExpired:
+        return {"pass": False, "score": 0, "errors": ["timeout"], "stderr": "timeout"}
+    except Exception as e:
+        return {"pass": False, "score": 0, "errors": [str(e)], "stderr": str(e)}
+
+
+def score_signals_rule_based(report_file: str) -> dict:
+    """
+    用 rubrics 中的 script 类评估项对交易信号做规则门控。
+    不调用 LLM — 只跑确定性脚本。
+
+    评估项:
+      - schema_validity  (veto):  格式完整性
+      - factual_accuracy (high):  价格/乖离率与缓存一致性
+      - data_timeliness   (high):  TimesFM校准数据时效
+
+    返回:
+      { verdict, score, items: {id: {pass, score, errors}} }
+    """
+    rubric_file = os.path.join(RUBRIC_DIR, "trade_signals.json")
+    if not os.path.exists(rubric_file) or not os.path.exists(report_file):
+        return {"verdict": "pass", "score": 10, "skipped": True}
+
+    with open(rubric_file) as f:
+        rubric = json.load(f)
+
+    script_items = [it for it in rubric["items"] if it["judge"] == "script"]
+    if not script_items:
+        return {"verdict": "pass", "score": 10, "skipped": True}
+
+    item_results = {}
+    total_weight = 0
+    total_score = 0
+
+    for item in script_items:
+        item_id = item["id"]
+        script_path = item["script"]
+        res = _run_script_item(script_path, report_file)
+        item_results[item_id] = {
+            "weight": item["weight"],
+            "pass": res["pass"],
+            "score": res["score"],
+            "errors": res["errors"],
+        }
+        w = RUBRIC_GATE["weights"].get(item["weight"], 0.20)
+        total_weight += w
+        total_score += w * res["score"]
+
+    final_score = round(total_score / total_weight, 1) if total_weight > 0 else 10
+
+    # 判定
+    verdict = "pass"
+    reasons = []
+
+    # Veto: schema_validity 不通过
+    if RUBRIC_GATE["veto_reject"]:
+        schema_res = item_results.get("schema_validity", {})
+        if not schema_res.get("pass", True):
+            verdict = "reject"
+            reasons.append(f"veto: schema校验失败 ({len(schema_res.get('errors', []))}错误)")
+
+    # 总分低于 reject 阈值
+    if verdict != "reject" and final_score < RUBRIC_GATE["reject_score"]:
+        verdict = "reject"
+        reasons.append(f"总分{final_score} < {RUBRIC_GATE['reject_score']}")
+
+    # low_confidence
+    if verdict == "pass" and final_score < RUBRIC_GATE["low_confidence_score"]:
+        verdict = "low_confidence"
+        reasons.append(f"总分{final_score} < {RUBRIC_GATE['low_confidence_score']}")
+
+    return {
+        "verdict": verdict,
+        "score": final_score,
+        "reasons": reasons,
+        "items": item_results,
+    }
+
+
 def build_synthesis_paragraph(mkt_temp, overseas_text, records):
     """
     全局合成判断：聚合温度计、外盘、TimesFM分位、个股乖离率、波动率体制切换。
@@ -968,7 +1086,10 @@ def build_synthesis_paragraph(mkt_temp, overseas_text, records):
 
 
 def main():
-    date_str = sys.argv[1] if len(sys.argv) > 1 else datetime.now(TZ).strftime('%Y%m%d')
+    # Parse args: first non-flag arg is date_str
+    args = [a for a in sys.argv[1:] if not a.startswith("--")]
+    skip_rubrics = "--skip-rubrics" in sys.argv
+    date_str = args[0] if args else datetime.now(TZ).strftime('%Y%m%d')
     analysis_file = f"{PROJECT_DIR}/reports/trading_analysis_{date_str}.md"
     if not os.path.exists(analysis_file):
         print(f"报告未找到: {analysis_file}")
@@ -1327,6 +1448,30 @@ def main():
         f.write(report)
     print(report)
     print(f"\n✓ {output_file}")
+
+    # ── Rubrics 规则门控（v2.5.0）──
+    # 仅 script 类评估项（schema_validity + factual_accuracy + data_timeliness）
+    # 不调用 LLM — 确定性脚本，嵌入 retry loop
+    if not skip_rubrics:
+        rubrics_result = score_signals_rule_based(output_file)
+        verdict = rubrics_result["verdict"]
+        score = rubrics_result["score"]
+        print(f"\n📋 Rubrics门控: {verdict} (score={score})")
+        for reason in rubrics_result.get("reasons", []):
+            print(f"  → {reason}")
+        for item_id, ir in rubrics_result.get("items", {}).items():
+            status = "✅" if ir["pass"] else "❌"
+            err_count = len(ir.get("errors", []))
+            err_detail = f" ({err_count}错误)" if err_count else ""
+            print(f"  {status} {item_id}: {ir['score']}{err_detail}")
+
+        if verdict == "reject":
+            print("\n⚠️ Rubrics门控拒绝，触发重试")
+            sys.exit(3)  # exit code 3 = rubrics reject → retry
+        elif verdict == "low_confidence":
+            print("\n⚠️ Rubrics低置信度，继续推送但标记")
+    else:
+        print("\n[skip-rubrics] 跳过规则门控")
 
 
 if __name__ == '__main__':

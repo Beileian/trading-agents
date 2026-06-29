@@ -61,7 +61,7 @@ sed -i "s/2021-06-04 至 2026-06-04/2021-06-04 至 $DATE_STR/" trading_analysis_
 echo "[2/5] IMA观点管线..."
 /usr/bin/python3 "$SCRIPT_DIR/ima_pipeline.py" 2>&1 || echo "[WARN] IMA管线失败，继续"
 
-# 步骤3: 交易推荐表格（Schema 校验 + 重试）
+# 步骤3: 交易推荐表格（Schema 校验 + Rubrics 规则门控 + 重试）
 echo "[3/5] 生成交易推荐..."
 MAX_GEN_RETRIES=2
 GEN_RETRY=0
@@ -75,6 +75,11 @@ while [ $GEN_RETRY -le $MAX_GEN_RETRIES ]; do
         if [ $EXIT_CODE -eq 2 ]; then
             echo "[RETRY] Schema 校验失败 (exit=$EXIT_CODE)，重试第 $((GEN_RETRY+1))/$MAX_GEN_RETRIES 次..."
             # 重跑 trading_analysis 重新生成报告（可能格式差异导致解析失败）
+            /usr/bin/python3 trading_analysis_latest.py 2>&1 || echo "[WARN] 重新分析失败"
+            GEN_RETRY=$((GEN_RETRY+1))
+        elif [ $EXIT_CODE -eq 3 ]; then
+            echo "[RETRY] Rubrics 门控拒绝 (exit=$EXIT_CODE)，重试第 $((GEN_RETRY+1))/$MAX_GEN_RETRIES 次..."
+            # Rubrics拒绝说明内容质量问题，重跑LLM分析后再次生成
             /usr/bin/python3 trading_analysis_latest.py 2>&1 || echo "[WARN] 重新分析失败"
             GEN_RETRY=$((GEN_RETRY+1))
         else
