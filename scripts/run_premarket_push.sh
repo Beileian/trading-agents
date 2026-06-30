@@ -97,44 +97,133 @@ Schema 校验经 $MAX_GEN_RETRIES 次重试仍未通过，已阻断推送。
     exit 1
 fi
 
-# 步骤3.5: Rubric 质量评估（双套标准）
-#   A. 分析报告质量 → trading_analysis → trade_recommendation.json (6维度)
-#   B. 信号格式质量 → trade_signals → trade_signals.json (4维度)
-RUBRIC_LOW_QUALITY=false
+# 步骤3.5: Rubric 三套标准交叉验证
+#   A. 分析报告质量 → trading_analysis → trade_recommendation.json (LLM类,5维度)
+#   B. 信号格式质量 → trade_signals → trade_signals.json (script类+LLM类,4维度)
+#   C. 信号规则门控 → generate_trade_signals 内置 (script类,3维度，已在步骤3中执行)
+#
+#  聚合判定: 任一 veto 不通过→REJECT; 任一 high 不通过→LOW_CONFIDENCE;
+#            否则取三套最低分判定; 全部通过→PASS
+RUBRIC_TAG=""
+RUBRIC_VERDICT="pass"
+RUBRIC_MIN_SCORE=10
 TRADE_FILE="$REPORT_DIR/trade_signals_${DATE_TAG}.md"
 ANALYSIS_FILE="$REPORT_DIR/trading_analysis_${DATE_TAG}.md"
 RUBRIC_SCRIPT="$PROJECT_DIR/rubrics/run_rubrics.py"
 SIGNAL_RUBRIC="$PROJECT_DIR/rubrics/trade_signals.json"
 RECO_RUBRIC="$PROJECT_DIR/rubrics/trade_recommendation.json"
+
+# 辅助函数: 从 rubric_log.jsonl 最新一条提取聚合判定
+_rubric_merge() {
+    local verdict="$1" score="$2" label="$3"
+    # 更新最低分
+    if [ "$(echo "$score < $RUBRIC_MIN_SCORE" | bc 2>/dev/null || echo 0)" = "1" ]; then
+        RUBRIC_MIN_SCORE="$score"
+    fi
+    # veto → REJECT 不可逆
+    if [ "$verdict" = "reject" ]; then
+        RUBRIC_VERDICT="reject"
+    elif [ "$RUBRIC_VERDICT" != "reject" ] && [ "$verdict" = "low_confidence" ]; then
+        RUBRIC_VERDICT="low_confidence"
+    fi
+}
+
 if [ -f "$RUBRIC_SCRIPT" ]; then
-    # A. 分析报告质量评估
+    # C. script类门控已在步骤3中由 generate_trade_signals 执行
+    #    从日志提取结果
+    if [ -f "$TRADE_FILE" ]; then
+        echo "[3.5/5] Rubric C: 信号规则门控 (script)..."
+        SIG_OUTPUT=$(/usr/bin/python3 "$SCRIPT_DIR/generate_trade_signals.py" "$DATE_TAG" 2>&1 || true)
+        if echo "$SIG_OUTPUT" | grep -q "Rubrics门控: pass"; then
+            _rubric_merge "pass" "10.0" "C"
+            echo "  ✅ Rubric C: pass (score=10.0)"
+        elif echo "$SIG_OUTPUT" | grep -q "Rubrics门控: low_confidence"; then
+            _rubric_merge "low_confidence" "6.0" "C"
+            echo "  ⚠️ Rubric C: low_confidence"
+        else
+            echo "  ⚠️ Rubric C: 未检测到门控输出，跳过"
+        fi
+    fi
+
+    # A. 分析报告质量评估 (LLM类)
     if [ -f "$ANALYSIS_FILE" ] && [ -f "$RECO_RUBRIC" ]; then
-        echo "[3.5/5] Rubric A: 分析报告质量..."
-        /usr/bin/python3 "$RUBRIC_SCRIPT" "$ANALYSIS_FILE" --rubric "$RECO_RUBRIC" 2>&1 || {
-            RUBRIC_EXIT=$?
-            if [ $RUBRIC_EXIT -eq 2 ]; then
-                echo "[RUBRIC-A] REJECT"
-            elif [ $RUBRIC_EXIT -eq 1 ]; then
-                echo "[RUBRIC-A] LOW_CONFIDENCE"
+        echo "[3.5/5] Rubric A: 分析报告质量 (LLM)..."
+        RUBRIC_A_OUTPUT=$(/usr/bin/python3 "$RUBRIC_SCRIPT" "$ANALYSIS_FILE" --rubric "$RECO_RUBRIC" 2>&1) || {
+            RUBRIC_A_EXIT=$?
+            RUBRIC_A_VERDICT=$(echo "$RUBRIC_A_OUTPUT" | python3 -c "import sys,json; d=json.load(sys.stdin); print(d.get('verdict','pass'))" 2>/dev/null || echo "pass")
+            RUBRIC_A_SCORE=$(echo "$RUBRIC_A_OUTPUT" | python3 -c "import sys,json; d=json.load(sys.stdin); print(d.get('score',10))" 2>/dev/null || echo "10")
+            # 列出不通过项
+            RUBRIC_A_FAILED=$(echo "$RUBRIC_A_OUTPUT" | python3 -c "
+import sys,json
+d=json.load(sys.stdin)
+items=d.get('items',{})
+failed=[k for k,v in items.items() if not v.get('pass',True)]
+print(','.join(failed) if failed else '')
+" 2>/dev/null || echo "")
+            _rubric_merge "$RUBRIC_A_VERDICT" "$RUBRIC_A_SCORE" "A"
+            if [ -n "$RUBRIC_A_FAILED" ]; then
+                echo "  ⚠️ Rubric A: $RUBRIC_A_VERDICT (score=$RUBRIC_A_SCORE, failed=$RUBRIC_A_FAILED)"
+            else
+                echo "  ✅ Rubric A: $RUBRIC_A_VERDICT (score=$RUBRIC_A_SCORE)"
             fi
+            true
         }
+        if [ "${RUBRIC_A_EXIT:-0}" -eq 0 ]; then
+            RUBRIC_A_VERDICT=$(echo "$RUBRIC_A_OUTPUT" | python3 -c "import sys,json; d=json.load(sys.stdin); print(d.get('verdict','pass'))" 2>/dev/null || echo "pass")
+            RUBRIC_A_SCORE=$(echo "$RUBRIC_A_OUTPUT" | python3 -c "import sys,json; d=json.load(sys.stdin); print(d.get('score',10))" 2>/dev/null || echo "10")
+            _rubric_merge "$RUBRIC_A_VERDICT" "$RUBRIC_A_SCORE" "A"
+            echo "  ✅ Rubric A: $RUBRIC_A_VERDICT (score=$RUBRIC_A_SCORE)"
+        fi
     else
         echo "[3.5/5] Rubric A: 跳过（分析报告或rubric缺失）"
     fi
-    # B. 信号格式质量评估 → 决定推送质量标记
+
+    # B. 信号格式质量评估 (script+LLM混合)
     if [ -f "$TRADE_FILE" ] && [ -f "$SIGNAL_RUBRIC" ]; then
-        echo "[3.5/5] Rubric B: 信号格式质量..."
-        /usr/bin/python3 "$RUBRIC_SCRIPT" "$TRADE_FILE" --rubric "$SIGNAL_RUBRIC" 2>&1 || {
-            RUBRIC_EXIT=$?
-            if [ $RUBRIC_EXIT -eq 2 ]; then
-                echo "[RUBRIC-B] REJECT — 质量门槛未通过，标记为低质量继续推送"
-                RUBRIC_LOW_QUALITY=true
-            elif [ $RUBRIC_EXIT -eq 1 ]; then
-                echo "[RUBRIC-B] LOW_CONFIDENCE — 部分项未通过，标记为低置信度推送"
+        echo "[3.5/5] Rubric B: 信号格式质量 (混合)..."
+        RUBRIC_B_OUTPUT=$(/usr/bin/python3 "$RUBRIC_SCRIPT" "$TRADE_FILE" --rubric "$SIGNAL_RUBRIC" 2>&1) || {
+            RUBRIC_B_EXIT=$?
+            RUBRIC_B_VERDICT=$(echo "$RUBRIC_B_OUTPUT" | python3 -c "import sys,json; d=json.load(sys.stdin); print(d.get('verdict','pass'))" 2>/dev/null || echo "pass")
+            RUBRIC_B_SCORE=$(echo "$RUBRIC_B_OUTPUT" | python3 -c "import sys,json; d=json.load(sys.stdin); print(d.get('score',10))" 2>/dev/null || echo "10")
+            RUBRIC_B_FAILED=$(echo "$RUBRIC_B_OUTPUT" | python3 -c "
+import sys,json
+d=json.load(sys.stdin)
+items=d.get('items',{})
+failed=[k for k,v in items.items() if not v.get('pass',True)]
+print(','.join(failed) if failed else '')
+" 2>/dev/null || echo "")
+            _rubric_merge "$RUBRIC_B_VERDICT" "$RUBRIC_B_SCORE" "B"
+            if [ -n "$RUBRIC_B_FAILED" ]; then
+                echo "  ⚠️ Rubric B: $RUBRIC_B_VERDICT (score=$RUBRIC_B_SCORE, failed=$RUBRIC_B_FAILED)"
+            elif [ "$RUBRIC_B_EXIT" -eq 0 ]; then
+                echo "  ✅ Rubric B: pass (score=$RUBRIC_B_SCORE)"
+            else
+                echo "  ⚠️ Rubric B: $RUBRIC_B_VERDICT (score=$RUBRIC_B_SCORE)"
             fi
+            true
         }
+        if [ "${RUBRIC_B_EXIT:-0}" -eq 0 ]; then
+            RUBRIC_B_VERDICT=$(echo "$RUBRIC_B_OUTPUT" | python3 -c "import sys,json; d=json.load(sys.stdin); print(d.get('verdict','pass'))" 2>/dev/null || echo "pass")
+            RUBRIC_B_SCORE=$(echo "$RUBRIC_B_OUTPUT" | python3 -c "import sys,json; d=json.load(sys.stdin); print(d.get('score',10))" 2>/dev/null || echo "10")
+            _rubric_merge "$RUBRIC_B_VERDICT" "$RUBRIC_B_SCORE" "B"
+            echo "  ✅ Rubric B: $RUBRIC_B_VERDICT (score=$RUBRIC_B_SCORE)"
+        fi
     else
         echo "[3.5/5] Rubric B: 跳过（信号表或rubric缺失）"
+    fi
+
+    # 聚合判定 → 标签
+    if [ "$RUBRIC_VERDICT" = "reject" ]; then
+        RUBRIC_TAG="⚠️ 低质量 "
+        echo ""
+        echo "📋 三套Rubrics聚合: REJECT (min_score=$RUBRIC_MIN_SCORE) — 标记为低质量继续推送"
+    elif [ "$RUBRIC_VERDICT" = "low_confidence" ]; then
+        RUBRIC_TAG="⚠️ 低置信度 "
+        echo ""
+        echo "📋 三套Rubrics聚合: LOW_CONFIDENCE (min_score=$RUBRIC_MIN_SCORE) — 标记为低置信度推送"
+    else
+        echo ""
+        echo "📋 三套Rubrics聚合: PASS (min_score=$RUBRIC_MIN_SCORE)"
     fi
 else
     echo "[3.5/5] Rubric质量评估... 跳过（脚本缺失）"
@@ -167,19 +256,8 @@ SIGNAL_FILE="$PROJECT_DIR/reports/overseas_signal_${DATE_STR}.md"
 OPINION_FILE="$REPORT_DIR/opinions_${DATE_TAG}.md"
 HAS_CONTENT=false
 
-# Rubric 质量标记
-RUBRIC_TAG=""
-if [ "${RUBRIC_LOW_QUALITY:-false}" = "true" ]; then
-    RUBRIC_TAG="⚠️ 低质量 "
-else
-    RUBRIC_LOG="$PROJECT_DIR/rubrics/rubric_log.jsonl"
-    if [ -f "$RUBRIC_LOG" ]; then
-        LAST_VERDICT=$(tail -1 "$RUBRIC_LOG" 2>/dev/null | python3 -c "import sys,json; d=json.load(sys.stdin); print(d.get('verdict',''))" 2>/dev/null || echo "")
-        if [ "$LAST_VERDICT" = "low_confidence" ]; then
-            RUBRIC_TAG="⚠️ 低置信度 "
-        fi
-    fi
-fi
+# Rubric 质量标记（由步骤3.5的三套交叉验证聚合判定）
+# RUBRIC_TAG 和 RUBRIC_VERDICT 已由步骤3.5的 _rubric_merge 函数确定
 # 前置一致性标记
 if [ "${CONSISTENCY_WARN:-false}" = "true" ]; then
     RUBRIC_TAG="${RUBRIC_TAG}📉数据偏差 "
