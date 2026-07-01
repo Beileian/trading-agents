@@ -264,7 +264,9 @@ if [ "${CONSISTENCY_WARN:-false}" = "true" ]; then
 fi
 
 # 构建推送内容头部
-echo "# ${RUBRIC_TAG}A股开盘前分析 · $DATE_STR" > "$PUSH_FILE"
+# 构建标题 — 始终附加 Rubrics 分数（所有判定结果可见可追溯）
+RUBRIC_SCORE_LINE=" · Rubrics ${RUBRIC_MIN_SCORE}"
+echo "# ${RUBRIC_TAG}A股开盘前分析 · $DATE_STR${RUBRIC_SCORE_LINE}" > "$PUSH_FILE"
 echo "" >> "$PUSH_FILE"
 
 if [ -f "$TRADE_FILE" ]; then
