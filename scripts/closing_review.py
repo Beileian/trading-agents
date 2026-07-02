@@ -1314,7 +1314,19 @@ def build_report(prices, thresholds, overseas_dir, overseas_conf):
     if vwap_corrected:
         L.append(f"\n> VWAP修正: {'，'.join(sorted(vwap_corrected))}，共{len(vwap_corrected)}只")
     L.append("")
-    
+
+    # ═══ 4b. 缠论结构简评（chanlun-trading-system v1.0，proxy_research 模式）═══
+    # 日线级代理分析：分型→笔→中枢→状态→信号→动作→过滤器→回测→自检
+    try:
+        from chanlun_closing import build_chanlun_summary as _build_chanlun_summary
+        chanlun_lines = _build_chanlun_summary(prices, thresholds)
+        if chanlun_lines:
+            L.extend(chanlun_lines)
+            L.append("")
+    except Exception as e:
+        L.append(f"**④b 缠论结构简评**")
+        L.append(f"*缠论模块加载异常: {e}*")
+
     # ═══ 5. 价格穿越 ═══
     L.append("**⑤ 价格穿越**")
     L.append("*超涨=收盘价突破阻力位的幅度 | 破位=收盘价跌破支撑位的幅度 | 基准=今早交易推荐中的支撑/阻力位*")
