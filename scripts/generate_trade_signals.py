@@ -247,17 +247,140 @@ def extract(section, key):
     return '-'
 
 
+def calc_technical_sr(symbol: str) -> tuple[float | None, float | None, dict]:
+    """
+    规则化技术支撑/阻力位计算，不依赖LLM。
+    三重方法融合：
+      A. 近期摆动高低点（20日）：最近完整波段的高低点
+      B. 成交密集区 POC（60日）：成交量最大的价格区间
+      C. 斐波那契回撤位（从最近波段低点到高点）
+    优先级: A的极端高低点作为边界校验 → B的POC作为核心 → C的斐波那契作为修正。
+    返回 (support, resistance, debug_info)，失败返回 (None, None, {})
+    """
+    cache_file = TICKER_CACHE.get(symbol, '')
+    cache_path = os.path.join(PROJECT_DIR, 'data', 'cache', cache_file)
+    if not os.path.exists(cache_path):
+        return None, None, {}
+    try:
+        df = pd.read_csv(cache_path, parse_dates=['Date'])
+        df = df.set_index('Date').sort_index()
+        df = df.tail(120)
+        if len(df) < 20:
+            return None, None, {}
+
+        close = df['Close']
+        high = df['High']
+        low = df['Low']
+        volume = df['Volume']
+        latest_price = float(close.iloc[-1])
+
+        # ATR(14)
+        tr = pd.concat([
+            high - low,
+            abs(high - close.shift(1)),
+            abs(low - close.shift(1))
+        ], axis=1).max(axis=1)
+        atr14 = float(tr.rolling(14).mean().iloc[-1])
+        if pd.isna(atr14) or atr14 <= 0:
+            return None, None, {}
+
+        # ── A. 近期摆动高低点 ──
+        # 支撑用60日窗口（保守，保障下方安全边际）
+        # 阻力用20日窗口（灵敏，只取近期最近高点作为参考）
+        win20 = df.tail(20)
+        win60 = df.tail(60)
+        swing_high = float(win20['High'].max())
+        swing_low = float(win60['Low'].min())
+
+        # ── B. 成交密集区 POC（30日，与20日阻力窗口对齐）──
+        win_poc = df.tail(30)
+        price_min = float(win_poc['Low'].min())
+        price_max = float(win_poc['High'].max())
+        # 每区间宽度 = 0.3×ATR（精细分档）
+        bucket_width = max(atr14 * 0.3, (price_max - price_min) / 30)
+        buckets = {}
+        for idx, row in win60.iterrows():
+            bucket_idx = int((row['Close'] - price_min) / bucket_width)
+            buckets[bucket_idx] = buckets.get(bucket_idx, 0) + row['Volume']
+        sorted_buckets = sorted(buckets.items(), key=lambda x: x[1], reverse=True)
+        # Top2 成交量区间
+        poc_buckets = [price_min + b[0] * bucket_width for b in sorted_buckets[:2]]
+        poc_buckets.sort()
+        poc_low = poc_buckets[0]
+        poc_high = poc_buckets[-1] + bucket_width
+
+        # ── C. 斐波那契回撤位 ──
+        fib_low = float(df.tail(60)['Low'].min())
+        fib_high = float(df.tail(60)['High'].max())
+        fib_range = fib_high - fib_low
+        fib_382 = fib_high - fib_range * 0.382
+        fib_500 = fib_high - fib_range * 0.500
+        fib_618 = fib_high - fib_range * 0.618
+
+        # ── 融合逻辑 ──
+        # 核心原则: 支撑/阻力必须对当前交易有参考意义，不照搬历史极值。
+        # 优先级: swing高低点 > POC（仅作微调参考，不覆盖swing）> fib > MA20±ATR
+        
+        ma20 = float(close.tail(20).mean())
+        
+        # -- 支撑 --
+        if latest_price - swing_low > atr14 * 3:
+            # swing_low 太远，用 fib_618
+            if latest_price - fib_618 > atr14 * 2:
+                support = round(ma20 - atr14, 2)
+            else:
+                support = round(fib_618, 2)
+        else:
+            # swing_low 可用，POC仅当在价下方时微调
+            if poc_low < latest_price and poc_low > swing_low:
+                # POC低区在 swing_low 之上、价之下 → 更贴近的支撑参考
+                support = round(poc_low, 2)
+            else:
+                support = round(swing_low, 2)
+
+        # -- 阻力 --
+        if swing_high - latest_price > atr14 * 3:
+            # swing_high 太远，用 fib_382
+            if fib_382 - latest_price > atr14 * 2:
+                resistance = round(latest_price + atr14 * 1.5, 2)
+            else:
+                resistance = round(fib_382, 2)
+        else:
+            # swing_high 可用，POC仅当在价上方时微调
+            if poc_high > latest_price and poc_high < swing_high:
+                # POC高区在 swing_high 之下、价之上 → 更贴近的阻力参考
+                resistance = round(poc_high, 2)
+            else:
+                resistance = round(swing_high, 2)
+
+        # 边界校验
+        if support >= latest_price:
+            support = round(latest_price - atr14 * 0.75, 2)
+        if resistance <= latest_price:
+            resistance = round(latest_price + atr14 * 0.75, 2)
+
+        # 宽度校验
+        if (resistance - support) < atr14 * 0.5:
+            support = round(latest_price - atr14 * 0.75, 2)
+            resistance = round(latest_price + atr14 * 0.75, 2)
+
+        debug = {
+            'method': 'technical_sr',
+            'swing_low': swing_low, 'swing_high': swing_high,
+            'poc_low': round(poc_low, 2), 'poc_high': round(poc_high, 2),
+            'fib_382': round(fib_382, 2), 'fib_500': round(fib_500, 2),
+            'fib_618': round(fib_618, 2),
+            'atr14': round(atr14, 4),
+            'price': latest_price,
+        }
+        return support, resistance, debug
+    except Exception as e:
+        return None, None, {'error': str(e)}
+
+
 def calc_vwap_support_resistance(symbol: str) -> tuple[float | None, float | None]:
     """
-    基于 VWAP（成交量加权均价）计算支撑/阻力位，替代纯均线偏移。
-    通达信筹码分布思路：支撑=近期高量区加权均价，阻力=近期高量区均价上沿。
-
-    方法:
-      - 取近20日数据，计算每日 VWAP = (High+Low+Close)/3 * Volume 加权
-      - 支撑位 = 20日VWAP - 0.5×ATR(14)
-      - 阻力位 = 20日VWAP + 0.5×ATR(14)
-      - VWAP 本身作为中枢位，支撑/阻力各偏移半倍ATR
-    返回 (support, resistance)，失败返回 (None, None)
+    基于 VWAP 计算支撑/阻力——仅作为技术位不可用时的降级方案。
     """
     cache_file = TICKER_CACHE.get(symbol, '')
     cache_path = os.path.join(PROJECT_DIR, 'data', 'cache', cache_file)
@@ -266,32 +389,25 @@ def calc_vwap_support_resistance(symbol: str) -> tuple[float | None, float | Non
     try:
         df = pd.read_csv(cache_path, parse_dates=['Date'])
         df = df.set_index('Date').sort_index()
-        df = df.tail(60)  # 取近60日保证ATR稳定
+        df = df.tail(60)
         if len(df) < 14:
             return None, None
-
-        # 每日典型价格
         df['typical'] = (df['High'] + df['Low'] + df['Close']) / 3
-        # 20日VWAP
         df['tv'] = df['typical'] * df['Volume']
         df['cum_tv'] = df['tv'].rolling(20).sum()
         df['cum_vol'] = df['Volume'].rolling(20).sum()
         df['vwap20'] = df['cum_tv'] / df['cum_vol']
-
-        # ATR(14)
         df['tr'] = pd.concat([
             df['High'] - df['Low'],
             abs(df['High'] - df['Close'].shift(1)),
             abs(df['Low'] - df['Close'].shift(1))
         ], axis=1).max(axis=1)
         df['atr14'] = df['tr'].rolling(14).mean()
-
         latest = df.iloc[-1]
         vwap = latest['vwap20']
         atr = latest['atr14']
         if pd.isna(vwap) or pd.isna(atr) or atr <= 0:
             return None, None
-
         support = round(vwap - 0.5 * atr, 2)
         resistance = round(vwap + 0.5 * atr, 2)
         return support, resistance
@@ -300,55 +416,62 @@ def calc_vwap_support_resistance(symbol: str) -> tuple[float | None, float | Non
 
 
 def validate_support_resistance(llm_support: float | None, llm_resistance: float | None,
-                                current_price: float, vwap_support: float, vwap_resistance: float) -> tuple[str, float | None, float | None]:
+                                current_price: float, tech_support: float, tech_resistance: float,
+                                vwap_support: float | None = None, vwap_resistance: float | None = None) -> tuple[str, float | None, float | None]:
     """
-    验证 LLM 给的支撑/阻力是否合理，不合理则用 VWAP 修正。
-    规则:
-      1. 支撑位 > 当前价 → 不合理（支撑应在价下）
-      2. 阻力位 < 当前价 → 不合理（阻力应在价上）
-      3. 支撑到阻力间距 < 0.3×VWAP间距 → 太窄
-      4. 支撑到阻力间距 > 4×VWAP间距 → 太宽
-      5. LLM支撑阻力中点偏离VWAP中枢超过1.2×VWAP半带宽 → 修正
+    验证 LLM 给的支撑/阻力是否合理，不合理则用规则化技术位修正。
+    技术位来源: calc_technical_sr()（摆动高低点+POC+斐波那契），不再依赖 VWAP。
+    校验规则:
+      1. 支撑位 > 当前价 → 不合理
+      2. 阻力位 < 当前价 → 不合理
+      3. 间距 < 0.3×ATR → 太窄
+      4. 间距 > 5×ATR → 太宽（极端趋势时 LLM 可能乱给）
+      5. 中枢偏离技术位中枢超过1.5×技术位半带宽 → 修正
+    VWAP 仅在技术位不可用时作为 fallback。
     """
     if llm_support is None or llm_resistance is None:
         return 'no_data', None, None
-    if vwap_support is None or vwap_resistance is None:
-        return 'ok', llm_support, llm_resistance
 
     llm_gap = llm_resistance - llm_support
     if llm_gap <= 0:
-        return 'invalid', vwap_support, vwap_resistance
+        return 'invalid', tech_support, tech_resistance
 
-    vwap_gap = vwap_resistance - vwap_support
-    if vwap_gap <= 0:
+    tech_gap = tech_resistance - tech_support
+    if tech_gap <= 0:
+        # 技术位异常，回退到 VWAP
+        if vwap_support and vwap_resistance:
+            return 'corrected', vwap_support, vwap_resistance
         return 'ok', llm_support, llm_resistance
 
-    vwap_mid = (vwap_support + vwap_resistance) / 2
-    vwap_half = vwap_gap / 2
-
+    tech_mid = (tech_support + tech_resistance) / 2
+    tech_half = tech_gap / 2
     llm_mid = (llm_support + llm_resistance) / 2
-    mid_deviation = abs(llm_mid - vwap_mid) / vwap_half
+    mid_deviation = abs(llm_mid - tech_mid) / tech_half if tech_half > 0 else 999
 
     verdict = 'ok'
+    reason = []
 
-    # 规则1: 支撑位在价上
     if current_price and llm_support > current_price:
         verdict = 'corrected'
-    # 规则2: 阻力位在价下
+        reason.append('sup>price')
     if current_price and llm_resistance < current_price:
         verdict = 'corrected'
-    # 规则3: 间距太窄
-    if llm_gap < vwap_gap * 0.3:
+        reason.append('res<price')
+    # 间距太窄
+    if llm_gap < tech_gap * 0.3:
         verdict = 'corrected'
-    # 规则4: 间距太宽
-    if llm_gap > vwap_gap * 4:
+        reason.append(f'narrow({llm_gap:.1f}<{tech_gap*0.3:.1f})')
+    # 间距太宽（放宽至5×，避免极端趋势误杀）
+    if llm_gap > tech_gap * 5:
         verdict = 'corrected'
-    # 规则5: 中枢偏移
-    if mid_deviation > 1.2:
+        reason.append(f'wide({llm_gap:.1f}>{tech_gap*5:.1f})')
+    # 中枢偏移（放宽至1.5×，减少误杀）
+    if mid_deviation > 1.5:
         verdict = 'corrected'
+        reason.append(f'dev({mid_deviation:.1f})')
 
     if verdict != 'ok':
-        return verdict, vwap_support, vwap_resistance
+        return f"corrected({'|'.join(reason)})", tech_support, tech_resistance
     return 'ok', llm_support, llm_resistance
 
 
@@ -1166,29 +1289,36 @@ def main():
     except Exception as e:
         print(f"[signals] style_rotation unavailable: {e}", file=sys.stderr)
 
-    # ── VWAP支撑/阻力修正（P0: 通达信筹码分布思路）──
-    vwap_corrections = 0
+    # ── 技术支撑/阻力位修正（摆动高低点+POC+斐波那契，VWAP降级为fallback）──
+    sr_corrections = 0
+    sr_skipped = 0
     for i, r in enumerate(records):
         if r['name'] in [n for _, n in TICKERS]:
             symbol = [s for s, n2 in TICKERS if n2 == r['name']][0]
-            vwap_s, vwap_r = calc_vwap_support_resistance(symbol)
-            if vwap_s is None or vwap_r is None:
+            tech_s, tech_r, debug = calc_technical_sr(symbol)
+            if tech_s is None or tech_r is None:
+                sr_skipped += 1
                 continue
+            # 同时算 VWAP 作为 fallback
+            vwap_s, vwap_r = calc_vwap_support_resistance(symbol)
             try:
                 sup_val = float(r['support']) if r['support'] and r['support'] != '-' else None
                 res_val = float(r['resistance']) if r['resistance'] and r['resistance'] != '-' else None
                 price_val = float(r['price']) if r['price'] and r['price'] != '-' else None
             except (ValueError, TypeError):
                 sup_val, res_val, price_val = None, None, None
-            verdict, new_s, new_r = validate_support_resistance(sup_val, res_val, price_val, vwap_s, vwap_r)
+            verdict, new_s, new_r = validate_support_resistance(
+                sup_val, res_val, price_val, tech_s, tech_r, vwap_s, vwap_r
+            )
             if verdict != 'ok':
                 r['support'] = str(new_s)
                 r['resistance'] = str(new_r)
-                r['_vwap_corrected'] = True
-                vwap_corrections += 1
-                print(f"  [VWAP修正] {r['name']}: LLM支撑={sup_val}/阻力={res_val} → VWAP支撑={new_s}/阻力={new_r} (原因:{verdict})")
-    if vwap_corrections:
-        print(f"  共 {vwap_corrections} 只标的采用VWAP修正")    
+                r['_sr_corrected'] = True
+                r['_sr_method'] = debug.get('method', 'technical_sr')
+                sr_corrections += 1
+                print(f"  [技术位修正] {r['name']}: LLM支撑={sup_val}/阻力={res_val} → 技术支撑={new_s}/阻力={new_r} (原因:{verdict} | {debug.get('method','?')})")
+    if sr_corrections:
+        print(f"  共 {sr_corrections} 只标的采用技术位修正（{sr_skipped} 只跳过）")    
 
     # ── P5: 波动率自适应仓位调整 ──
     total_signal = get_total_temp_signal(mkt_temp)
