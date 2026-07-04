@@ -1,9 +1,9 @@
 {
   "name": "交易推荐质量",
-  "description": "对 generate_trade_signals.py LLM 输出的多维质量评估标准",
-  "version": "3.3.0",
+  "description": "对 generate_trade_signals.py LLM 输出的多维质量评估标准。v3.4 新增过程审计项（anti_hallucination_audit），基于 Qwen/Fudan Verification Horizon 论文启发：不只看结果，也看过程是否可信。",
+  "version": "3.5.0",
   "created": "2026-06-21",
-  "updated": "2026-06-27",
+  "updated": "2026-07-04",
   "aggregation": "normalized_weighted_average",
   "score_range": "0-10",
   "items": [
@@ -17,6 +17,24 @@
       "pass_condition": "exit code 0",
       "fail_action": "reject_and_retry",
       "normalized_score_rule": "pass=10, 每个错误扣1分"
+    },
+    {
+      "id": "anti_hallucination_audit",
+      "description": "过程审计：检测输出中是否存在虚构数据、无来源裸数字、模糊技术位等反幻觉铁律违规",
+      "rationale": "Verification Horizon 论文揭示：只看结果打分容易被'刷分'（LLM学会产出看起来合理但数据虚构的输出）。过程审计在结果评分之外独立检查生成过程的诚实性——支撑位必须有日期+价格，趋势判断必须有具体指标值，禁止'附近/平台/区域'等模糊表述。",
+      "weight": "veto",
+      "judge": "script",
+      "script": "rubrics/check_anti_hallucination.py",
+      "pass_condition": "exit code 0（违规数=0）",
+      "fail_action": "reject_and_retry",
+      "normalized_score_rule": "pass=10, 每个违规扣2分, 最低0",
+      "audit_rules": {
+        "bare_number": "价格/涨跌幅/PE/市值等数字必须绑定来源（日线缓存/Sina实时/akshare/快照），裸数字=违规",
+        "vague_level": "支撑位/阻力位必须有具体日期区间+对应价格范围，\"附近/平台/区域/一带\"等模糊词=违规",
+        "trend_evidence": "趋势判断必须有具体技术指标数值（均线价/RSI读数/MACD值等），纯定性描述=违规",
+        "contradiction": "同一标的的看多/看空结论与技术数据矛盾（如说'多头排列'但均线实际空头）=违规",
+        "prior_memory": "引用指数点位时必须来自最新拉取数据，不能凭记忆（对应 MEMORY.md 6-12 事故）"
+      }
     },
     {
       "id": "logic_completeness",
@@ -61,11 +79,32 @@
       "pass_condition": "分数 >= 6",
       "fail_action": "mark_low_confidence",
       "normalized_score_rule": "LLM直接输出0-10分"
+    },
+    {
+      "id": "style_concentration",
+      "description": "风格依赖检查：检测推荐是否存在方向/板块/乖离率的过度集中，避免押注单一市场风格",
+      "rationale": "百亿私募顾王琴访谈指出'短期冠军多是押中市场风格'。当所有推荐指向同一方向、同一板块或乖离率同质时，可能放宽风控、跟风追涨。veto级：集中度过高应在推送前标注醒目风险提示或拒绝推送。",
+      "weight": "veto",
+      "judge": "script",
+      "script": "rubrics/check_style_concentration.py",
+      "pass_condition": "exit code 0（concentration_score < 2）",
+      "fail_action": "mark_low_confidence",
+      "normalized_score_rule": "concentration_score 0-1=10分, 2-3=5分, 4-5=2分, 6=0分",
+      "concentration_dimensions": {
+        "direction": "全部标的指向同一交易方向（全买/全卖），≥3只触发最高级",
+        "sector": "同一大类行业占比≥75%且≥2只，如金融/消费/科技过度集中",
+        "bias": "所有乖离率同向且跨度<5%，表示选股逻辑高度同质化"
+      }
     }
   ],
   "thresholds": {
     "low_confidence": "任一 high 项得分 < 5 或总分 < 5.5",
-    "reject": "veto 项未通过(schema=0) 或 action_consistency < 6"
+    "reject": "veto 项未通过（schema=0 或 anti_hallucination违规>0 或 action_consistency < 6）"
   },
-  "log": "rubrics/rubric_log.jsonl"
+  "log": "rubrics/rubric_log.jsonl",
+  "changelog": {
+    "3.5.0": "新增 style_concentration（veto级风格依赖检查），基于顾王琴访谈启发：方向/板块/乖离率三维度检测过度集中，避免押注单一市场风格。",
+    "3.4.0": "新增 anti_hallucination_audit（veto级过程审计），基于 Verification Horizon 论文启发：不只看结果也看过程。5条审计规则覆盖虚构数据/模糊技术位/缺乏指标证据/方向矛盾/凭记忆引用。",
+    "3.3.0": "初始版本"
+  }
 }
