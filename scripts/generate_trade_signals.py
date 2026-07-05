@@ -643,43 +643,103 @@ def adjust_trigger(advice, support, resistance, bias_val, direction, calibration
 def load_overseas_signal(date_str: str) -> str | None:
     y = date_str[:4]; m = date_str[4:6]; d = date_str[6:8]
     iso = f"{y}-{m}-{d}"
-    # 优先读金桥本地（由金桥 extract_signal.py 生成）
+
+    # v3.0: 优先读 morning_brief（06:30 外盘研判的直接产出）
+    morning_path = os.path.join(OVERSEAS_DIR, "reports", f"morning_brief_{iso}.md")
+    if os.path.exists(morning_path):
+        with open(morning_path) as f:
+            return f.read()
+
+    # fallback 1: 金桥本地 extract_signal 生成
     path = os.path.join(PROJECT_DIR, "reports", f"overseas_signal_{iso}.md")
-    if not os.path.exists(path):
-        # fallback: overseas-morning-brief 旧址
-        path = os.path.join(OVERSEAS_DIR, "reports", f"overseas_signal_{iso}.md")
     if os.path.exists(path):
         with open(path) as f:
             return f.read()
+
+    # fallback 2: overseas-morning-brief 旧址
+    path = os.path.join(OVERSEAS_DIR, "reports", f"overseas_signal_{iso}.md")
+    if os.path.exists(path):
+        with open(path) as f:
+            return f.read()
+
     return None
 
 
-def extract_overseas_direction_value(overseas_text: str | None) -> int:
+def extract_overseas_direction_value(overseas_text: str | None) -> tuple[int, str]:
     """
     从外盘信号文本提取方向关键词映射为数值信号：+1=偏多, -1=偏空, 0=中性。
+    返回 (direction_value, confidence_str)。
+
+    v3.0: 同时读取环境变量 OVERSEAS_DIRECTION/OVERSEAS_CONFIDENCE（由
+    run_premarket_analysis.sh 从 morning_brief 提取后注入）作为硬信号。
     """
+    # ── 优先：环境变量硬信号（run_premarket_analysis.sh 已从 morning_brief 提取）──
+    env_dir = os.getenv('OVERSEAS_DIRECTION', '').strip()
+    env_conf = os.getenv('OVERSEAS_CONFIDENCE', '').strip()
+    if env_dir in ('偏多', '偏空', '中性'):
+        dir_map = {'偏多': 1, '偏空': -1, '中性': 0}
+        conf_val = env_conf if env_conf in ('高', '中', '低') else '中'
+        print(f"  [外盘硬信号] 方向={env_dir} 置信度={conf_val} (来自环境变量)")
+        return dir_map[env_dir], conf_val
+
+    direction_value = 0
+    confidence_str = '中'
+
     if not overseas_text:
-        return 0
+        return 0, '中'
+
     text_lower = overseas_text.lower()
-    # 偏多关键词
-    bullish_kw = ['偏多', '看多', '强势', '反弹', '上涨', '逆势', '修复', '走强']
-    # 偏空关键词
-    bearish_kw = ['偏空', '看空', '弱势', '下跌', '回调', '承压', '暴跌', '跳空']
-    bullish_score = sum(1 for kw in bullish_kw if kw in text_lower)
-    bearish_score = sum(1 for kw in bearish_kw if kw in text_lower)
-    if bullish_score > bearish_score:
-        return 1
-    elif bearish_score > bullish_score:
-        return -1
-    # 中性：检查研判方向行
-    m = re.search(r"\*\*研判方向\*\*:\s*(.+?)(?:\s*\||\n)", overseas_text)
+
+    # ── 方向判断 ──
+    # 优先匹配综合研判行中的显式方向声明
+    m = re.search(r'综合研判[^\n]*', overseas_text)
     if m:
-        direction = m.group(1).strip()
-        if any(kw in direction for kw in ['偏多', '看多']):
-            return 1
-        if any(kw in direction for kw in ['偏空', '看空']):
-            return -1
-    return 0
+        synth = m.group(0)
+        if any(kw in synth for kw in ['偏多', '看多']):
+            direction_value = 1
+        elif any(kw in synth for kw in ['偏空', '看空']):
+            direction_value = -1
+
+    # 综合研判无方向 → 关键词计数回退
+    if direction_value == 0:
+        bullish_kw = ['偏多', '看多', '强势', '反弹', '上涨', '逆势', '修复', '走强']
+        bearish_kw = ['偏空', '看空', '弱势', '下跌', '回调', '承压', '暴跌', '跳空']
+        bullish_score = sum(1 for kw in bullish_kw if kw in text_lower)
+        bearish_score = sum(1 for kw in bearish_kw if kw in text_lower)
+        if bullish_score > bearish_score:
+            direction_value = 1
+        elif bearish_score > bullish_score:
+            direction_value = -1
+
+        # 仍无方向：检查研判方向行
+        if direction_value == 0:
+            m = re.search(r"\*\*研判方向\*\*:\s*(.+?)(?:\s*\||\n)", overseas_text)
+            if m:
+                direction = m.group(1).strip()
+                if any(kw in direction for kw in ['偏多', '看多']):
+                    direction_value = 1
+                if any(kw in direction for kw in ['偏空', '看空']):
+                    direction_value = -1
+
+    # ── 置信度提取 ──
+    # 优先从综合研判行提取
+    if m:
+        synth = m.group(0)
+        conf_match = re.search(r'置信度[：: ]*(高|中|低)', synth)
+        if conf_match:
+            confidence_str = conf_match.group(1)
+    if confidence_str == '中':
+        # 次选：从研判方向行提取
+        m2 = re.search(r'\*\*研判方向\*\*:\s*[^\n]{0,50}(?:置信度[：: ]*(高|中|低))', overseas_text)
+        if m2:
+            confidence_str = m2.group(1)
+    if confidence_str == '中':
+        # 末选：环境变量
+        if env_conf in ('高', '中', '低'):
+            confidence_str = env_conf
+
+    print(f"  [外盘方向解析] direction={direction_value} confidence={confidence_str}")
+    return direction_value, confidence_str
 
 
 def compute_bayes_adjusted_predictions(overseas_text: str | None) -> dict:
@@ -691,7 +751,7 @@ def compute_bayes_adjusted_predictions(overseas_text: str | None) -> dict:
     """
     import glob
     import numpy as np
-    overseas_signal = extract_overseas_direction_value(overseas_text)
+    overseas_signal, overseas_conf = extract_overseas_direction_value(overseas_text)
     if overseas_signal == 0:
         return {}
 
@@ -984,7 +1044,7 @@ def score_signals_rule_based(report_file: str) -> dict:
       - data_timeliness   (high):  TimesFM校准数据时效
 
     返回:
-      { verdict, score, items: {id: {pass, score, errors}} }
+      { verdict, score, degradation_tier, items: {id: {pass, score, errors}} }
     """
     rubric_file = os.path.join(RUBRIC_DIR, "trade_signals.json")
     if not os.path.exists(rubric_file) or not os.path.exists(report_file):
@@ -1019,13 +1079,27 @@ def score_signals_rule_based(report_file: str) -> dict:
 
     # 判定
     verdict = "pass"
+    degradation_tier = "strict_verified"
     reasons = []
 
-    # Veto: schema_validity 不通过
+    # ── 代理降级层（受缠论三级模式启发）──
+    # process_audit 违规 → 降级但不直接 reject
+    process_res = item_results.get("process_audit", {})
+    if not process_res.get("pass", True):
+        err_count = len(process_res.get("errors", []))
+        if err_count >= 3:
+            degradation_tier = "proxy_major"
+            reasons.append(f"deg: process_audit {err_count}违规 → proxy_major")
+        else:
+            degradation_tier = "proxy_minor"
+            reasons.append(f"deg: process_audit {err_count}违规 → proxy_minor")
+
+    # Veto: schema_validity 不通过 → 硬拒绝（格式残缺无法使用）
     if RUBRIC_GATE["veto_reject"]:
         schema_res = item_results.get("schema_validity", {})
         if not schema_res.get("pass", True):
             verdict = "reject"
+            degradation_tier = "research_only"
             reasons.append(f"veto: schema校验失败 ({len(schema_res.get('errors', []))}错误)")
 
     # 总分低于 reject 阈值
@@ -1038,9 +1112,14 @@ def score_signals_rule_based(report_file: str) -> dict:
         verdict = "low_confidence"
         reasons.append(f"总分{final_score} < {RUBRIC_GATE['low_confidence_score']}")
 
+    # 如果仅是代理降级、不是硬拒绝，保持 pass 但标记 degradation
+    if verdict == "reject" and degradation_tier not in ("research_only",):
+        degradation_tier = "research_only"
+
     return {
         "verdict": verdict,
         "score": final_score,
+        "degradation_tier": degradation_tier,
         "reasons": reasons,
         "items": item_results,
     }
@@ -1065,8 +1144,10 @@ def build_synthesis_paragraph(mkt_temp, overseas_text, records):
         elif '中性' in s:
             temp_direction = 'neutral'
 
-    # 2. 外盘方向
-    overseas_direction = extract_overseas_direction_value(overseas_text)
+    # 2. 外盘方向（v3.0: 增加置信度维度）
+    overseas_direction, overseas_confidence = extract_overseas_direction_value(overseas_text)
+    # 高置信度外盘信号 → 在合成判断中权重 x2
+    overseas_weight = 2 if overseas_confidence == '高' else (1.5 if overseas_confidence == '中' else 1)
 
     # 3. TimesFM 分位：各标的最近一期 P50 相对 latest_close
     cal_dir = os.path.join(PROJECT_DIR, 'logs', 'timesfm_calibration')
@@ -1154,9 +1235,10 @@ def build_synthesis_paragraph(mkt_temp, overseas_text, records):
             triggered_rule0 = True
 
     if not triggered_rule0:
-        # Rule 1: 温度偏热 + 外盘偏空
+        # Rule 1: 温度偏热 + 外盘偏空（外盘信号按置信度加权）
         if temp_direction == 'warm' and overseas_direction == -1:
-            lines.append("温度偏热但外盘偏空，短期谨慎，估值偏贵但情绪支撑")
+            conf_note = f"（置信度{overseas_confidence}）" if overseas_confidence != '中' else ""
+            lines.append(f"温度偏热但外盘偏空{conf_note}，短期谨慎，估值偏贵但情绪支撑")
         # Rule 2: 温度偏冷 + 多数个股 TimesFM P10 附近
         elif temp_direction == 'cold' and (timesfm_p10_minus >= timesfm_total * 0.5 if timesfm_total else False):
             lines.append("估值便宜但趋势未确认，关注企稳信号")
@@ -1169,7 +1251,7 @@ def build_synthesis_paragraph(mkt_temp, overseas_text, records):
                 sym = a.get('symbol', '某标的')
                 lines.append(f"{sym}波动结构变化，历史回测参考价值降低")
 
-    # 默认：方向一致性
+    # 默认：方向一致性（v3.0: 外盘信号按置信度加权计入）
     if not lines:
         signals = []
         if temp_direction == 'warm':
@@ -1177,9 +1259,9 @@ def build_synthesis_paragraph(mkt_temp, overseas_text, records):
         elif temp_direction == 'cold':
             signals.append('温度偏冷')
         if overseas_direction == 1:
-            signals.append('外盘偏多')
+            signals.append(f'外盘偏多({overseas_confidence}置信)')
         elif overseas_direction == -1:
-            signals.append('外盘偏空')
+            signals.append(f'外盘偏空({overseas_confidence}置信)')
         if timesfm_total:
             if timesfm_bullish > timesfm_bearish:
                 signals.append('TimesFM多数偏多')
@@ -1191,8 +1273,23 @@ def build_synthesis_paragraph(mkt_temp, overseas_text, records):
             signals.append('乖离率多数偏弱')
 
         if signals:
-            bullish_count = sum(1 for s in signals if any(w in s for w in ['偏热', '偏多', '偏强']))
-            bearish_count = sum(1 for s in signals if any(w in s for w in ['偏冷', '偏空', '偏弱']))
+            # v3.0: 外盘信号加权统计
+            bullish_count = 0
+            bearish_count = 0
+            for s in signals:
+                if '偏热' in s or '偏强' in s:
+                    bullish_count += 1
+                elif '偏冷' in s or '偏弱' in s:
+                    bearish_count += 1
+                elif '外盘偏多' in s:
+                    bullish_count += overseas_weight
+                elif '外盘偏空' in s:
+                    bearish_count += overseas_weight
+                elif 'TimesFM多数偏多' in s:
+                    bullish_count += 1
+                elif 'TimesFM多数偏空' in s:
+                    bearish_count += 1
+
             if bullish_count > bearish_count:
                 lines.append(f"多维度偏多（{'、'.join(signals)}），趋势延续但注意追高风险")
             elif bearish_count > bullish_count:
@@ -1579,14 +1676,15 @@ def main():
     print(report)
     print(f"\n✓ {output_file}")
 
-    # ── Rubrics 规则门控（v2.5.0）──
-    # 仅 script 类评估项（schema_validity + factual_accuracy + data_timeliness）
+    # ── Rubrics 规则门控（v2.6.0，含缠论自检门+代理降级层）──
+    # script 类评估项：schema/process_audit/factual/data_timeliness
     # 不调用 LLM — 确定性脚本，嵌入 retry loop
     if not skip_rubrics:
         rubrics_result = score_signals_rule_based(output_file)
         verdict = rubrics_result["verdict"]
         score = rubrics_result["score"]
-        print(f"\n📋 Rubrics门控: {verdict} (score={score})")
+        degradation = rubrics_result.get("degradation_tier", "strict_verified")
+        print(f"\n📋 Rubrics门控: {verdict} (score={score}, degradation={degradation})")
         for reason in rubrics_result.get("reasons", []):
             print(f"  → {reason}")
         for item_id, ir in rubrics_result.get("items", {}).items():
@@ -1598,8 +1696,17 @@ def main():
         if verdict == "reject":
             print("\n⚠️ Rubrics门控拒绝，触发重试")
             sys.exit(3)  # exit code 3 = rubrics reject → retry
+        elif degradation in ("proxy_minor", "proxy_major"):
+            tag = "⚡" if degradation == "proxy_minor" else "⚡⚡"
+            degradation_note = f"\n\n{tag} [代理分析: {degradation}] 数据质量不完全满足严格验证标准，分析结果供参考，请结合人工判断。"
+            with open(output_file, 'a') as f:
+                f.write(degradation_note)
+            print(f"\n⚡ 代理降级 ({degradation}): 已追加降级标记到报告")
         elif verdict == "low_confidence":
-            print("\n⚠️ Rubrics低置信度，继续推送但标记")
+            degradation_note = f"\n\n⚠️ [低置信度] 评估得分偏低，建议审阅后决策。"
+            with open(output_file, 'a') as f:
+                f.write(degradation_note)
+            print("\n⚠️ Rubrics低置信度: 已追加标记到报告")
     else:
         print("\n[skip-rubrics] 跳过规则门控")
 
