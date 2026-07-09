@@ -1464,7 +1464,36 @@ def main():
                     r['price'] = f"{authoritative_price:.2f}"
                 break
 
-    # ── Schema 校验 ──
+    # ── 价格兜底: 如果仍为 '-'，从快照/日线取昨收 ──
+    for r in records:
+        if not r.get('price') or r['price'] == '-':
+            for ticker, name in TICKERS:
+                if r["name"] == name:
+                    # 从收盘快照取
+                    try:
+                        from symbols_config import TICKER_SINA_MAP
+                        snap_file = os.path.join(PROJECT_DIR, 'reports', f'close_snapshot_{DATE}.json')
+                        if os.path.exists(snap_file):
+                            with open(snap_file) as f:
+                                snap = json.load(f)
+                            if name in snap:
+                                r['price'] = f"{snap[name]:.2f}"
+                                print(f"  [价格兜底] {name}: 快照→{r['price']}")
+                                break
+                    except:
+                        pass
+                    # 从日线缓存取昨收
+                    try:
+                        cache_file = os.path.join(PROJECT_DIR, 'data', 'cache', f'{ticker}-daily.csv')
+                        if os.path.exists(cache_file):
+                            import pandas as pd
+                            df = pd.read_csv(cache_file)
+                            if len(df) > 0:
+                                r['price'] = f"{float(df.iloc[-1]['Close']):.2f}"
+                                print(f"  [价格兜底] {name}: 日线昨收→{r['price']}")
+                    except:
+                        pass
+                    break
     passed, errors = validate_records(records)
     if not passed:
         print("\n⚠️ Schema 校验失败:")

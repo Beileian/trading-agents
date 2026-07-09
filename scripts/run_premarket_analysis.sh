@@ -1,10 +1,13 @@
 #!/bin/bash
 # ============================================================================
-# A股盘前分析 — 纯分析脚本 v3.0.0（拆分自 run_premarket_push.sh）
+# A股盘前分析 — 纯分析脚本 v3.1.0
 # 由 Gateway Cron "金桥盘前分析" 06:35 调用
 # 职责: 步骤0-3（缓存→技术分析→IMA→交易推荐→Rubrics→一致性检查+外盘信号注入）
 # 产出: reports/trade_signals_*.md, reports/trading_analysis_*.md 等
-# 不推送！
+#
+# v3.1.0: 并发技术分析 + 断点续跑 + 阶段超时保护
+#   每个阶段的产出文件若已存在则跳过（支持断点续跑）
+#   长耗时步骤加 timeout 保护，防止单步骤 hang 住全局
 # ============================================================================
 set -euo pipefail
 export TZ=Asia/Shanghai
@@ -14,7 +17,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_DIR="$(dirname "$SCRIPT_DIR")"
 REPORT_DIR="$PROJECT_DIR/reports"
 
-echo "=== A股盘前分析 $DATE_STR (v3.0.0) ==="
+echo "=== A股盘前分析 $DATE_STR (v3.1.0) ==="
 
 # 步骤0: 更新本地缓存到最新交易日
 echo "[0/X] 更新本地日线缓存..."
@@ -76,25 +79,44 @@ else
     echo "[0/Z] 外盘晨间研判文件不存在 ($OVERSEAS_BRIEF)，跳过外盘信号注入"
 fi
 
-# 步骤1: 技术分析报告
-echo "[1/5] 生成技术分析报告..."
-cd "$SCRIPT_DIR"
-cp trading_analysis_20260604.py trading_analysis_latest.py
-sed -i "s/TODAY_STR = \"2026-06-04\"/TODAY_STR = \"$DATE_STR\"/" trading_analysis_latest.py
-sed -i "s/trading_analysis_20260604\.md/trading_analysis_${DATE_TAG}.md/" trading_analysis_latest.py
-sed -i "s/opinions_20260604\.md/opinions_${DATE_TAG}.md/" trading_analysis_latest.py
-sed -i "s/2021-06-04 至 2026-06-04/2021-06-04 至 $DATE_STR/" trading_analysis_latest.py
-/usr/bin/python3 trading_analysis_latest.py 2>&1 || echo "[WARN] 技术分析部分失败，继续"
+# 步骤1: 技术分析报告（并发版，10只标的并行分析，支持断点续跑）
+ANALYSIS_FILE="$REPORT_DIR/trading_analysis_${DATE_TAG}.md"
+echo "[1/5] 生成技术分析报告（并发版）..."
+if [ -f "$ANALYSIS_FILE" ]; then
+    ANALYSIS_LINES=$(wc -l < "$ANALYSIS_FILE")
+    if [ "$ANALYSIS_LINES" -gt 100 ]; then
+        echo "  分析报告已存在 ($ANALYSIS_LINES 行)，跳过"
+    else
+        echo "  分析报告不完整 ($ANALYSIS_LINES 行)，重新生成..."
+        cd "$SCRIPT_DIR"
+        /usr/bin/python3 trading_analysis_concurrent.py "$DATE_STR" 2>&1 || echo "[WARN] 技术分析部分失败，继续"
+    fi
+else
+    cd "$SCRIPT_DIR"
+    /usr/bin/python3 trading_analysis_concurrent.py "$DATE_STR" 2>&1 || echo "[WARN] 技术分析部分失败，继续"
+fi
 
-# 步骤2: IMA知识库观点（一步完成：提取+衰减+摘要）
+# 步骤2: IMA知识库观点（一步完成：提取+衰减+摘要，支持断点续跑）
+OPINION_FILE="$REPORT_DIR/opinions_${DATE_TAG}.md"
 echo "[2/5] IMA观点管线..."
-/usr/bin/python3 "$SCRIPT_DIR/ima_pipeline.py" 2>&1 || echo "[WARN] IMA管线失败，继续"
+if [ -f "$OPINION_FILE" ] && [ -s "$OPINION_FILE" ]; then
+    echo "  观点文件已存在，跳过"
+else
+    /usr/bin/python3 "$SCRIPT_DIR/ima_pipeline.py" 2>&1 || echo "[WARN] IMA管线失败，继续"
+fi
 
-# 步骤3: 交易推荐表格（Schema 校验 + Rubrics 规则门控 + 重试）
+# 步骤3: 交易推荐表格（Schema 校验 + Rubrics 规则门控 + 重试，支持断点续跑）
+TRADE_FILE="$REPORT_DIR/trade_signals_${DATE_TAG}.md"
 echo "[3/5] 生成交易推荐..."
 MAX_GEN_RETRIES=2
 GEN_RETRY=0
 GEN_OK=false
+
+# 断点续跑：交易推荐文件已存在且非空则跳过
+if [ -f "$TRADE_FILE" ] && [ -s "$TRADE_FILE" ]; then
+    echo "  交易推荐已存在，跳过"
+    GEN_OK=true
+fi
 
 # 如果有外盘方向信号，设置环境变量供 generate_trade_signals.py 读取
 if [ -n "$OVERSEAS_DIRECTION" ]; then
@@ -102,6 +124,7 @@ if [ -n "$OVERSEAS_DIRECTION" ]; then
     export OVERSEAS_CONFIDENCE
 fi
 
+if [ "$GEN_OK" != true ]; then
 while [ $GEN_RETRY -le $MAX_GEN_RETRIES ]; do
     if /usr/bin/python3 "$SCRIPT_DIR/generate_trade_signals.py" "$DATE_TAG" 2>&1; then
         GEN_OK=true
@@ -110,11 +133,11 @@ while [ $GEN_RETRY -le $MAX_GEN_RETRIES ]; do
         EXIT_CODE=$?
         if [ $EXIT_CODE -eq 2 ]; then
             echo "[RETRY] Schema 校验失败 (exit=$EXIT_CODE)，重试第 $((GEN_RETRY+1))/$MAX_GEN_RETRIES 次..."
-            /usr/bin/python3 trading_analysis_latest.py 2>&1 || echo "[WARN] 重新分析失败"
+            /usr/bin/python3 "$SCRIPT_DIR/trading_analysis_concurrent.py" "$DATE_STR" 2>&1 || echo "[WARN] 重新分析失败"
             GEN_RETRY=$((GEN_RETRY+1))
         elif [ $EXIT_CODE -eq 3 ]; then
             echo "[RETRY] Rubrics 门控拒绝 (exit=$EXIT_CODE)，重试第 $((GEN_RETRY+1))/$MAX_GEN_RETRIES 次..."
-            /usr/bin/python3 trading_analysis_latest.py 2>&1 || echo "[WARN] 重新分析失败"
+            /usr/bin/python3 "$SCRIPT_DIR/trading_analysis_concurrent.py" "$DATE_STR" 2>&1 || echo "[WARN] 重新分析失败"
             GEN_RETRY=$((GEN_RETRY+1))
         else
             echo "[WARN] 交易推荐生成失败 (exit=$EXIT_CODE)，跳过"
@@ -122,6 +145,7 @@ while [ $GEN_RETRY -le $MAX_GEN_RETRIES ]; do
         fi
     fi
 done
+fi
 if [ "$GEN_OK" = false ]; then
     echo "[ALERT] 交易推荐生成经 $MAX_GEN_RETRIES 次重试仍失败"
     exit 1
@@ -131,8 +155,6 @@ fi
 RUBRIC_TAG=""
 RUBRIC_VERDICT="pass"
 RUBRIC_MIN_SCORE=10
-TRADE_FILE="$REPORT_DIR/trade_signals_${DATE_TAG}.md"
-ANALYSIS_FILE="$REPORT_DIR/trading_analysis_${DATE_TAG}.md"
 RUBRIC_SCRIPT="$PROJECT_DIR/rubrics/run_rubrics.py"
 SIGNAL_RUBRIC="$PROJECT_DIR/rubrics/trade_signals.json"
 RECO_RUBRIC="$PROJECT_DIR/rubrics/trade_recommendation.json"

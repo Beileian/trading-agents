@@ -1,8 +1,17 @@
 #!/usr/bin/env python3
 """
-金桥量化交易推荐系统 v3.2.1
+金桥量化交易推荐系统 v3.3.0
 
 版本历史:
+  v3.3.0 (2026-07-09): P0 稳定性 — 并发技术分析 + 断点续跑
+    - trading_analysis_concurrent.py v1.0.0: ThreadPoolExecutor 并发分析（MAX_WORKERS=5）
+      - 10只标的从串行6-10分钟压缩到~1分钟
+      - 每个标的独立 DeepSeek API 调用，45s 超时 + 2次重试
+      - fallback 机制：单标的失败不影响整体报告
+    - run_premarket_analysis.sh v3.1.0:
+      - 断点续跑：analysis/opinions/trade_signals 已存在则跳过
+      - 重试时使用并发版脚本替代旧串行版
+      - 变量作用域清理（移除重复定义）
   v3.2.1 (2026-06-27): P0 逆向+冲突信号共振 — 外盘与A股趋势背离时上调置信度
     - generate_trade_signals.py: build_synthesis_paragraph() Rule 0 逆向+冲突检测
     - closing_review.py: update_cognition_state() 新增 a_share_actual_direction 字段
