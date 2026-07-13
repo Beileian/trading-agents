@@ -112,16 +112,24 @@ def fetch_sina_prices():
 
     # ── VPS代理拉取东方财富（硅谷IP不被阻断）──
     def _east_via_vps(east_codes: list) -> dict:
-        """通过SSH到硅谷VPS拉取东方财富数据"""
+        """通过SSH到硅谷VPS拉取东方财富数据。east_codes 可以是 (ec, type) 元组列表"""
         import subprocess
         result = {}
         try:
-            codes_json = json.dumps(east_codes)
+            # 兼容旧格式(纯字符串列表)和新格式((ec,type)列表)
+            ec_formatted = []
+            for item in east_codes:
+                if isinstance(item, tuple):
+                    ec_formatted.append(list(item))
+                else:
+                    ec_formatted.append([item, 'stock'])
+            codes_json = json.dumps(ec_formatted)
             vps_script = '''
 import urllib.request, json, sys
 east_codes = json.loads(sys.argv[1])
 results = {}
-for ec in east_codes:
+for item in east_codes:
+    ec, etype = item[0], item[1] if len(item) > 1 else "stock"
     if not ec:
         continue
     url = "https://push2.eastmoney.com/api/qt/stock/get?secid=" + ec + "&fields=f43,f44,f45,f46,f47,f57,f58,f60,f170"
@@ -131,12 +139,13 @@ for ec in east_codes:
         data = json.loads(resp.read())
         if data.get("data"):
             dd = data["data"]
+            div = 1000 if etype == "etf" else 100
             results[dd.get("f57", ec)] = {
-                "price": dd.get("f43", 0) / 100 if dd.get("f43") else None,
-                "high": dd.get("f44", 0) / 100 if dd.get("f44") else None,
-                "low": dd.get("f45", 0) / 100 if dd.get("f45") else None,
-                "open": dd.get("f46", 0) / 100 if dd.get("f46") else None,
-                "prev_close": dd.get("f60", 0) / 100 if dd.get("f60") else None,
+                "price": dd.get("f43", 0) / div if dd.get("f43") else None,
+                "high": dd.get("f44", 0) / div if dd.get("f44") else None,
+                "low": dd.get("f45", 0) / div if dd.get("f45") else None,
+                "open": dd.get("f46", 0) / div if dd.get("f46") else None,
+                "prev_close": dd.get("f60", 0) / div if dd.get("f60") else None,
                 "volume": dd.get("f47", 0),
                 "change_pct": dd.get("f170", 0) / 100 if dd.get("f170") else None,
             }
@@ -165,7 +174,8 @@ print(json.dumps(results, ensure_ascii=False))
         elif sc.startswith('sz'):
             east_codes.append(f'0.{code.replace(".SZ","")}')
         else:
-            east_codes.append('')  # 非统一代码
+            east_codes.append('')
+        # Note: price_watch SINA_MAP不含562500，本条仅在日后加入ETF时生效
 
     # 东方财富批量查询（一次取所有）
     east_prices = {}

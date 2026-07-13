@@ -44,7 +44,7 @@ WATCHLIST = {
     "sh600795": {"name": "国电电力",    "tencent": "sh600795", "east": "1.600795", "sina": "sh600795", "type": "stock"},
     "sz000066": {"name": "中国长城",    "tencent": "sz000066", "east": "0.000066", "sina": "sz000066", "type": "stock"},
     "sh600562": {"name": "国睿科技",    "tencent": "sh600562", "east": "1.600562", "sina": "sh600562", "type": "stock"},
-    "sh562500": {"name": "机器人ETF",  "tencent": "sh562500", "east": "1.562500", "sina": "sh562500", "type": "stock"},
+    "sh562500": {"name": "机器人ETF",  "tencent": "sh562500", "east": "1.562500", "sina": "sh562500", "type": "etf"},
 }
 
 # ── 数据类 ──
@@ -129,12 +129,14 @@ class PriceFetcher:
                 d = resp.json()
                 if d.get("data"):
                     dd = d["data"]
+                    # ETF的f43/f44/f45/f46/f60单位是厘(1/1000元)，股票是分(1/100元)
+                    div = 1000 if cfg.get("type") == "etf" else 100
                     results[dd["f57"]] = {
-                        "price": dd["f43"] / 100 if dd.get("f43") else None,
-                        "high": dd["f44"] / 100 if dd.get("f44") else None,
-                        "low": dd["f45"] / 100 if dd.get("f45") else None,
-                        "open": dd["f46"] / 100 if dd.get("f46") else None,
-                        "prev_close": dd["f60"] / 100 if dd.get("f60") else None,
+                        "price": dd["f43"] / div if dd.get("f43") else None,
+                        "high": dd["f44"] / div if dd.get("f44") else None,
+                        "low": dd["f45"] / div if dd.get("f45") else None,
+                        "open": dd["f46"] / div if dd.get("f46") else None,
+                        "prev_close": dd["f60"] / div if dd.get("f60") else None,
                         "change_pct": dd.get("f170", 0) / 100 if dd.get("f170") else None,
                     }
             except Exception:
@@ -144,14 +146,14 @@ class PriceFetcher:
         if not results:
             try:
                 import subprocess
-                ec_list = [cfg["east"] for cfg in WATCHLIST.values() if cfg.get("east")]
+                ec_list = [(cfg["east"], cfg.get("type", "stock")) for cfg in WATCHLIST.values() if cfg.get("east")]
                 if ec_list:
                     codes_json = json.dumps(ec_list)
                     vps_script = '''
 import urllib.request, json, sys
 east_codes = json.loads(sys.argv[1])
 results = {}
-for ec in east_codes:
+for ec, etype in east_codes:
     url = "https://push2.eastmoney.com/api/qt/stock/get?secid=" + ec + "&fields=f43,f44,f45,f46,f47,f57,f58,f60,f170"
     req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"})
     try:
@@ -159,12 +161,13 @@ for ec in east_codes:
         data = json.loads(resp.read())
         if data.get("data"):
             dd = data["data"]
+            div = 1000 if etype == "etf" else 100
             results[dd.get("f57", ec)] = {
-                "price": dd.get("f43", 0) / 100 if dd.get("f43") else None,
-                "high": dd.get("f44", 0) / 100 if dd.get("f44") else None,
-                "low": dd.get("f45", 0) / 100 if dd.get("f45") else None,
-                "open": dd.get("f46", 0) / 100 if dd.get("f46") else None,
-                "prev_close": dd.get("f60", 0) / 100 if dd.get("f60") else None,
+                "price": dd.get("f43", 0) / div if dd.get("f43") else None,
+                "high": dd.get("f44", 0) / div if dd.get("f44") else None,
+                "low": dd.get("f45", 0) / div if dd.get("f45") else None,
+                "open": dd.get("f46", 0) / div if dd.get("f46") else None,
+                "prev_close": dd.get("f60", 0) / div if dd.get("f60") else None,
                 "change_pct": dd.get("f170", 0) / 100 if dd.get("f170") else None,
             }
     except Exception:
