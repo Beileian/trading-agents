@@ -1,19 +1,8 @@
-.bak.*
-__pycache__/
-src/
-.env
-*.bak
-
-# 缓存数据（cron 每次运行都会更新，不纳入版本跟踪）
-data/cache/
-logs/cache/
-
-# 运行时状态文件（cron 自动写入，不手动编辑）
-logs/cognition_state.json
-logs/cognition_daily/
-logs/price_alerts_state.json
-
-# 备份目录
-scripts/archive.bak-*/
-.env
-.env
+# Generated reports
+reports/
+# Runtime logs
+logs/
+# Backups
+*.bak.*
+# Test files
+/tmp/

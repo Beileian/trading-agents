@@ -70,6 +70,8 @@ class PriceFetcher:
         self._degraded_sources = {}  # {source: degraded_until_ts}
         self._error_counts = {}      # {source: consecutive_errors}
         self._cross_log = []         # 最近交叉验证记录
+        self._last_prices = {}       # {source_code: last_price} 用于检测数据冻结
+        self._frozen_rounds = {}     # {source: consecutive_frozen_rounds}
 
     # ═══ 腾讯财经 ═══
     def _fetch_tencent(self) -> dict[str, dict]:
@@ -343,6 +345,31 @@ print(json.dumps(results, ensure_ascii=False))
             t3 = sina_data.get(sina_code) if sina_code else None
 
             pp = self._cross_verify(code, name, cfg["type"] == "index", t1, t2, t3)
+
+            # ═══ 冻结检测 ═══
+            # 数据冻结：当前价格与上一轮完全一致（合理精度范围内），连续多轮抛出
+            last = self._last_prices.get(code)
+            if pp.price > 0 and last is not None:
+                # 价格未变（精度0.001以内）
+                if abs(pp.price - last) < 0.001:
+                    self._frozen_rounds[code] = self._frozen_rounds.get(code, 0) + 1
+                    frozen_n = self._frozen_rounds[code]
+                    if frozen_n == 3:
+                        print(f"[冻结检测⚠️] {name}: 价格连续{frozen_n}轮未变 ({pp.price:.3f})，标记warning")
+                        pp.quality = "warning"
+                        pp.source_chain = pp.source_chain + ".frozen"
+                    elif frozen_n >= 5:
+                        print(f"[冻结检测🚨] {name}: 价格连续{frozen_n}轮未变 ({pp.price:.3f})，标记stale")
+                        pp.quality = "stale"
+                        pp.change_pct = 0
+                else:
+                    # 价格变了，重置计数
+                    self._frozen_rounds[code] = 0
+
+            # 更新历史
+            if pp.price > 0:
+                self._last_prices[code] = pp.price
+
             results[name] = pp
 
             # 单源数据质量差时收紧
