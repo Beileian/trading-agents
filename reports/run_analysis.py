@@ -192,6 +192,88 @@ def compute_indicators(rows):
 
 # ── DeepSeek API Call ───────────────────────────────────
 
+def _generate_fallback_analysis(ind):
+    """API不可用时的规则化fallback分析，基于技术指标数值自动生成模板文案。"""
+    name = ind['name']
+    price = ind['last_close']
+    ma5 = ind['ma5'] or 0
+    ma20 = ind['ma20'] or 0
+    ma60 = ind['ma60'] or 0
+    rsi14 = ind['rsi14'] or 50
+    week_chg = ind['week_change'] or 0
+    month_chg = ind['month_change'] or 0
+    
+    # 趋势判断
+    if ma5 > ma20 > ma60:
+        trend = "看涨"
+        trend_detail = "均线多头排列"
+    elif ma5 < ma20 < ma60:
+        trend = "看跌"
+        trend_detail = "均线空头排列"
+    elif ma5 > ma20 and ma20 < ma60:
+        trend = "震荡"
+        trend_detail = "短期修复但中期承压"
+    elif ma5 < ma20 and ma20 > ma60:
+        trend = "震荡"
+        trend_detail = "短期回调但中期未破"
+    else:
+        trend = "震荡"
+        trend_detail = "均线交织，方向不明"
+    
+    # RSI 信号
+    if rsi14 > 70:
+        rsi_signal = "RSI超买"
+    elif rsi14 < 30:
+        rsi_signal = "RSI超卖"
+    else:
+        rsi_signal = "RSI中性"
+    
+    # 支撑/阻力（基于MA20±2×ATR估算）
+    closes_30 = ind['last_30_closes']
+    if len(closes_30) >= 20:
+        atr_est = sum(abs(closes_30[i] - closes_30[i-1]) for i in range(1, min(21, len(closes_30)))) / min(20, len(closes_30)-1)
+    else:
+        atr_est = price * 0.02
+    support = round(ma20 - atr_est * 2, 2)
+    resistance = round(ma20 + atr_est * 2, 2)
+    
+    # 交易建议
+    if trend == "看涨" and rsi14 < 60:
+        advice = "买入"
+    elif trend == "看跌" and rsi14 > 40:
+        advice = "卖出"
+    else:
+        advice = "持有"
+    
+    # 仓位建议
+    if trend == "看涨":
+        pos = min(int(50 + (60 - rsi14) * 1.5), 80) if rsi14 < 70 else 20
+    elif trend == "看跌":
+        pos = max(int(30 - (rsi14 - 40) * 1.5), 5) if rsi14 > 40 else 50
+    else:
+        pos = 30
+    
+    # 理由
+    parts = [f"{rsi_signal}({rsi14:.0f})"]
+    if week_chg > 3:
+        parts.append(f"周涨{week_chg:+.1f}%")
+    elif week_chg < -3:
+        parts.append(f"周跌{week_chg:+.1f}%")
+    if month_chg > 5:
+        parts.append(f"月涨{month_chg:+.1f}%需警惕追高风险")
+    elif month_chg < -5:
+        parts.append(f"月跌{month_chg:+.1f}%关注超跌反弹")
+    parts.append(trend_detail)
+    reason = "，".join(parts[:3])
+    
+    return f"""趋势判断：{trend}
+支撑位：{support:.2f} - {support+atr_est:.2f} 元
+阻力位：{resistance-atr_est:.2f} - {resistance:.2f} 元
+交易建议：{advice}
+仓位建议：{pos}%
+理由：{reason}"""
+
+
 def call_deepseek(indicators, api_key):
     closes_str = ", ".join(f"{c:.2f}" for c in indicators["last_30_closes"])
 
@@ -235,23 +317,35 @@ def call_deepseek(indicators, api_key):
         "max_tokens": 400,
     }
 
-    req = urllib.request.Request(
-        DEEPSEEK_URL,
-        data=json.dumps(data).encode("utf-8"),
-        headers={
-            "Content-Type": "application/json",
-            "Authorization": f"Bearer {api_key}",
-        },
-        method="POST",
-    )
-
-    try:
-        with urllib.request.urlopen(req, timeout=60) as resp:
-            result = json.loads(resp.read().decode("utf-8"))
-        content = result["choices"][0]["message"]["content"]
-        return content
-    except Exception as e:
-        return f"【API调用失败】{str(e)}"
+    last_error = None
+    # 指数退避重试: 1s, 3s, 5s
+    for attempt, delay in enumerate([1, 3, 5]):
+        try:
+            req = urllib.request.Request(
+                DEEPSEEK_URL,
+                data=json.dumps(data).encode("utf-8"),
+                headers={
+                    "Content-Type": "application/json",
+                    "Authorization": f"Bearer {api_key}",
+                },
+                method="POST",
+            )
+            with urllib.request.urlopen(req, timeout=60) as resp:
+                result = json.loads(resp.read().decode("utf-8"))
+            content = result["choices"][0]["message"]["content"]
+            # 保护: 如果返回内容过短或明显是错误，不当作有效响应
+            if len(content.strip()) < 15:
+                raise ValueError(f"响应过短: {content!r}")
+            return content
+        except Exception as e:
+            last_error = e
+            if attempt < 2:  # 不是最后一次
+                import time
+                time.sleep(delay)
+    
+    # 所有重试失败 → 脚本内 rule-based fallback
+    print(f"  ⚠️ {indicators['name']}: API重试3次仍失败({last_error})，使用规则化fallback分析")
+    return f"【fallback】{_generate_fallback_analysis(indicators)}"
 
 
 # ── Format Report Section ───────────────────────────────
@@ -286,7 +380,13 @@ def format_section(indicators, analysis_text):
     section.append("")
     section.append("### AI 分析")
     section.append("")
-    section.append(analysis_text.strip())
+    is_fallback = analysis_text.startswith("【fallback】")
+    if is_fallback:
+        section.append("> ⚙️ 规则化分析（API未可用时的自动兜底）")
+        section.append("")
+        section.append(analysis_text.replace("【fallback】", "").strip())
+    else:
+        section.append(analysis_text.strip())
     section.append("")
     section.append("---")
     section.append("")

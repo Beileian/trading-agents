@@ -21,8 +21,8 @@ import requests
 
 # ── Config ──────────────────────────────────────────────
 CACHE_DIR = "/root/.openclaw/workspace/projects/trading-agents/logs/cache"
-REPORT_PATH = "/root/.openclaw/workspace/projects/trading-agents/reports/trading_analysis_20260624.md"
-OPINIONS_PATH = "/root/.openclaw/workspace/projects/trading-agents/reports/opinions_20260624.md"
+REPORT_PATH = "/root/.openclaw/workspace/projects/trading-agents/reports/trading_analysis_20260709.md"
+OPINIONS_PATH = "/root/.openclaw/workspace/projects/trading-agents/reports/opinions_20260709.md"
 def _load_deepseek_key():
     import os as _os
     key = _os.environ.get("DEEPSEEK_API_KEY", "")
@@ -44,7 +44,7 @@ DEEPSEEK_MODEL = "deepseek-v4-pro"
 
 SYMBOLS = symbols_config.SYMBOLS
 
-TODAY_STR = "2026-06-24"
+TODAY_STR = "2026-07-09"
 
 # ── Helpers ──────────────────────────────────────────────
 
@@ -186,7 +186,7 @@ def build_prompt(symbol, name, stype, metrics, extra):
 
 行业背景要求：结合标的所属行业，一句话说明当前该行业的核心驱动或压力（如政策变化、利率环境、资金风格偏好）。如果是宽基指数，说明当前市场风格的宏观逻辑。
 
-具体风险要求：指出一个可指认的、影响该标的近期走势的具体风险事件或因素。优先从技术指标形态推演（如RSI背离、均线死叉、MACD顶背离、布林带突破方向未确认），技术上无明显风险信号时，可给出基本面风险（如解禁高峰、政策细则未落地、成本端波动、竞争格局变化）。使用具体数字或时间窗口，不使用笼统措辞。"""
+具体风险要求：指出一个可指认的、影响该标的近期走势的具体风险事件或因素（如解禁高峰、政策细则未落地、成本端波动、竞争格局变化）。使用具体数字或时间窗口，不使用笼统措辞。"""
 
     # Price vs MAs
     price = extra["last_close"]
@@ -216,6 +216,59 @@ def build_prompt(symbol, name, stype, metrics, extra):
 {{"趋势": "看涨/看跌/震荡", "支撑位": "价格", "阻力位": "价格", "建议": "买入/卖出/持有", "仓位": 数字百分比(0-100), "行业背景": "≤60字当前行业核心逻辑", "具体风险": "≤60字可指认的风险事件", "理由": "≤100字简要理由"}}"""
 
     return sys_prompt, user_prompt
+
+
+def _generate_latest_fallback(symbol, name, metrics):
+    """API不可用时的规则化fallback分析。"""
+    try:
+        last_close = float(metrics.get('最新价', '0').replace('¥',''))
+        ma5 = float(metrics.get('MA5', '0').replace('¥',''))
+        ma20 = float(metrics.get('MA20', '0').replace('¥',''))
+        ma60 = float(metrics.get('MA60', '0').replace('¥',''))
+        rsi14 = float(metrics.get('RSI(14)', '50'))
+        week_chg_str = metrics.get('周涨跌', '0%').replace('%','').replace('+','')
+        month_chg_str = metrics.get('月涨跌', '0%').replace('%','').replace('+','')
+        week_chg = float(week_chg_str) if week_chg_str else 0
+        month_chg = float(month_chg_str) if month_chg_str else 0
+    except (ValueError, TypeError, KeyError):
+        last_close = 0; ma5 = 0; ma20 = 0; ma60 = 0; rsi14 = 50; week_chg = 0; month_chg = 0
+    
+    if ma5 > ma20 > ma60: trend = "看涨"; trend_detail = "均线多头排列"
+    elif ma5 < ma20 < ma60: trend = "看跌"; trend_detail = "均线空头排列"
+    elif ma5 > ma20 and ma20 < ma60: trend = "震荡"; trend_detail = "短期修复但中期承压"
+    elif ma5 < ma20 and ma20 > ma60: trend = "震荡"; trend_detail = "短期回调但中期未破"
+    else: trend = "震荡"; trend_detail = "均线交织，方向不明"
+    
+    if rsi14 > 70: rsi_signal = "RSI超买"
+    elif rsi14 < 30: rsi_signal = "RSI超卖"
+    else: rsi_signal = "RSI中性"
+    
+    atr_est = max(last_close * 0.02, abs(ma20 - last_close) * 2) if last_close > 0 else 0.5
+    support = round(ma20 - atr_est * 2, 2) if ma20 > 0 else round(last_close * 0.95, 2)
+    resistance = round(ma20 + atr_est * 2, 2) if ma20 > 0 else round(last_close * 1.05, 2)
+    
+    if trend == "看涨" and rsi14 < 60: advice = "买入"
+    elif trend == "看跌" and rsi14 > 40: advice = "卖出"
+    else: advice = "持有"
+    
+    if trend == "看涨": pos = min(int(50 + (60 - rsi14) * 1.5), 80) if rsi14 < 70 else 20
+    elif trend == "看跌": pos = max(int(30 - (rsi14 - 40) * 1.5), 5) if rsi14 > 40 else 50
+    else: pos = 30
+    
+    parts = [f"{rsi_signal}({rsi14:.0f})"]
+    if week_chg > 3: parts.append(f"周涨{week_chg:+.1f}%")
+    elif week_chg < -3: parts.append(f"周跌{week_chg:+.1f}%")
+    if month_chg > 5: parts.append(f"月涨{month_chg:+.1f}%需警惕追高风险")
+    elif month_chg < -5: parts.append(f"月跌{month_chg:+.1f}%关注超跌反弹")
+    parts.append(trend_detail)
+    
+    return {
+        '趋势': trend, '支撑位': f'{support:.2f}', '阻力位': f'{resistance:.2f}',
+        '建议': advice, '仓位': pos, '理由': '，'.join(parts[:3]),
+        '行业背景': '规则化分析（API未可用时的自动兜底）',
+        '具体风险': f'{trend_detail}环境下关注均线支撑位',
+        '_fallback': True,
+    }
 
 
 def call_deepseek(system_prompt, user_prompt, max_retries=3):
@@ -383,7 +436,7 @@ def main():
     header = f"""# 📊 A股技术分析与交易决策报告
 
 **生成日期**: {TODAY_STR}
-**数据范围**: 2021-06-04 至 2026-06-24（约5年日线）
+**数据范围**: 2021-06-04 至 2026-07-09（约5年日线）
 **分析标的**: 7只（3指数 + 4个股）
 **分析模型**: DeepSeek-chat
 
@@ -413,16 +466,10 @@ def main():
         decision = call_deepseek(sys_prompt, user_prompt)
 
         if decision is None:
-            # Fallback if API fails
-            decision = {
-                "趋势": "无法判断",
-                "支撑位": "N/A",
-                "阻力位": "N/A",
-                "建议": "持有",
-                "仓位": 0,
-                "理由": "API调用失败，请手动分析"
-            }
-            print(f"  ⚠️ API调用失败，使用默认值")
+            print(f"  ⚠️ API重试3次仍失败，使用规则化fallback分析")
+            decision = _generate_latest_fallback(symbol, name, metrics)
+        elif isinstance(decision, dict) and decision.get('_fallback'):
+            print(f"  ⚙️ 规则化fallback分析")
 
         print(f"  趋势: {decision.get('趋势', 'N/A')} | 建议: {decision.get('建议', 'N/A')} | 仓位: {decision.get('仓位', 'N/A')}%")
 

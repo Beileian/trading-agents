@@ -250,6 +250,33 @@ def fetch_close_prices():
         print(f"  收盘价来源: {src_summary} | 总计{len(prices)}只")
 
     return prices
+def load_morning_synthesis():
+    """从今日盘前交易推荐报告提取【合成判断】段落。
+    用于收盘复盘时验证盘前对市场整体方向的预判是否准确。
+    
+    返回 dict: { 'direction': '偏多'|'偏空'|'中性'|None, 'text': '...' }
+    """
+    signals_file = f"{PROJECT_DIR}/reports/trade_signals_{TODAY_TAG}.md"
+    if not os.path.exists(signals_file):
+        return None
+    
+    with open(signals_file) as f:
+        text = f.read()
+    
+    # 找【合成判断】行
+    for line in text.split('\n'):
+        line = line.strip()
+        if '【合成判断】' in line:
+            synthesis = line.split('【合成判断】')[-1].strip()
+            # 判断方向
+            if '偏多' in synthesis and '偏空' not in synthesis:
+                direction = '偏多'
+            elif '偏空' in synthesis:
+                direction = '偏空'
+            else:
+                direction = '中性'
+            return {'direction': direction, 'text': synthesis}
+    return None
 
 
 def load_thresholds():
@@ -352,35 +379,72 @@ def load_thresholds():
     return thresholds
 
 
-def load_overseas_direction():
-    """从外盘研判信号文件提取方向"""
-    # 双路径查找: 优先金桥本地 extract_signal.py 输出, fallback overseas 仓库
+def _find_overseas_file():
+    """查找外盘研判文件，支持新旧两种命名格式。
+    
+    优先级：
+    1. overseas_signal_{date}.md（旧格式，extract_signal.py输出）
+    2. morning_brief_{date}.md（新格式，外盘晨间研判v2.0+）
+    """
     for base_dir in [OVERSEAS_SIGNAL_DIR, f"{OVERSEAS_DIR}/reports"]:
-        overseas_file = f"{base_dir}/overseas_signal_{TODAY_DATE}.md"
-        if os.path.exists(overseas_file):
-            with open(overseas_file) as f:
-                text = f.read()
-            m = re.search(r"\*\*研判方向\*\*:\s*(.+?)(?:\s*\||\n)", text)
-            return m.group(1).strip() if m else None
+        # 新格式优先（2026-06-19起外盘研判切换为morning_brief）
+        morning_file = f"{base_dir}/morning_brief_{TODAY_DATE}.md"
+        if os.path.exists(morning_file):
+            return morning_file
+        # 旧格式fallback
+        signal_file = f"{base_dir}/overseas_signal_{TODAY_DATE}.md"
+        if os.path.exists(signal_file):
+            return signal_file
     return None
 
 
-def load_overseas_confidence():
-    """从外盘信号文件提取置信度"""
-    overseas_file = None
-    for base_dir in [OVERSEAS_SIGNAL_DIR, f"{OVERSEAS_DIR}/reports"]:
-        candidate = f"{base_dir}/overseas_signal_{TODAY_DATE}.md"
-        if os.path.exists(candidate):
-            overseas_file = candidate
-            break
+def load_overseas_direction():
+    """从外盘研判信号文件提取方向，适配新旧两种格式。
+    
+    旧格式: **研判方向**: 偏多
+    新格式: 方向偏多，置信度中。（综合研判段落）
+    """
+    overseas_file = _find_overseas_file()
     if not overseas_file:
         return None
-
     with open(overseas_file) as f:
         text = f.read()
+    # 旧格式
+    m = re.search(r"\*\*研判方向\*\*:\s*(.+?)(?:\s*\||\n)", text)
+    if m:
+        return m.group(1).strip()
+    # 新格式: 综合研判段落中提取"方向偏多"或"方向偏空"
+    # 找"综合研判"后的方向关键词
+    syn_section = text.split("📊 综合研判")[-1] if "综合研判" in text else text
+    m2 = re.search(r"方向(偏多|偏空|中性|分歧)", syn_section)
+    if m2:
+        return m2.group(0)  # e.g. "方向偏多"
+    # fallback: 全文中找
+    m3 = re.search(r"方向(偏多|偏空|中性|分歧)", text)
+    return m3.group(0) if m3 else None
 
-    m = re.search(r"\*\*置信度\*\*:\s*(.+)", text)
-    return m.group(1).strip() if m else None
+
+def load_overseas_confidence():
+    """从外盘研判信号文件提取置信度，适配新旧两种格式。
+    
+    旧格式: **置信度**: 高
+    新格式: 方向偏多，置信度中。（综合研判段落）
+    """
+    overseas_file = _find_overseas_file()
+    if not overseas_file:
+        return None
+    with open(overseas_file) as f:
+        text = f.read()
+    # 旧格式
+    m = re.search(r"\*\*置信度\*\*:\s*(.+?)(?:\s*\||\n)", text)
+    if m:
+        return m.group(1).strip()
+    # 新格式: 综合研判段落中提取"置信度高/中/低"
+    syn_section = text.split("📊 综合研判")[-1] if "综合研判" in text else text
+    m2 = re.search(r"置信度(高|中|低)", syn_section)
+    if m2:
+        return m2.group(1)
+    return None
 
 
 def check_breaches(prices, thresholds):
@@ -1218,6 +1282,33 @@ def build_report(prices, thresholds, overseas_dir, overseas_conf):
     else:
         L.append("**② 外盘验证**")
         L.append("今日外盘信号未生成（可能数据源异常或非交易日），跳过方向验证")
+        L.append("")
+    
+    # ═══ 2b. 合成判断验证（v2.6.6）═══
+    synthesis = load_morning_synthesis()
+    if synthesis:
+        # 计算三大指数实际方向
+        idx_codes = {}
+        for k in index_names:
+            if k in prices:
+                idx_codes[k] = prices[k]["chg_pct"]
+        vals = [v for v in idx_codes.values() if v is not None]
+        avg_idx_chg_syn = sum(vals) / len(vals) if vals else 0
+        
+        if avg_idx_chg_syn < -0.5:
+            syn_actual = "偏空"
+        elif avg_idx_chg_syn > 0.5:
+            syn_actual = "偏多"
+        else:
+            syn_actual = "震荡"
+        
+        syn_match = "✅" if (
+            (synthesis['direction'] == "偏多" and syn_actual == "偏多") or
+            (synthesis['direction'] == "偏空" and syn_actual == "偏空")
+        ) else "⚠️偏离" if synthesis['direction'] != "中性" and syn_actual != "震荡" else "⚪中性"
+        
+        L.append("**②b 合成判断验证**")
+        L.append(f"盘前预判「{synthesis['text']}」→ 实际 {syn_actual}（三大指数均 {avg_idx_chg_syn:+.2f}%） {syn_match}")
         L.append("")
     
     # ═══ 3. 极端波动 & 波动率体制切换 ═══

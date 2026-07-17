@@ -239,6 +239,75 @@ def build_prompt(symbol, name, stype, metrics, extra):
     return sys_prompt, user_prompt
 
 
+def _generate_concurrent_fallback(symbol, name, metrics):
+    """API不可用时的规则化fallback分析（直接复用run_analysis.py的模板逻辑）。"""
+    # 从metrics字典中提取技术指标
+    try:
+        last_close = float(metrics.get('最新价', '0').replace('¥',''))
+        ma5 = float(metrics.get('MA5', '0').replace('¥',''))
+        ma20 = float(metrics.get('MA20', '0').replace('¥',''))
+        ma60 = float(metrics.get('MA60', '0').replace('¥',''))
+        rsi14 = float(metrics.get('RSI(14)', '50'))
+        week_chg_str = metrics.get('周涨跌', '0%').replace('%','').replace('+','')
+        month_chg_str = metrics.get('月涨跌', '0%').replace('%','').replace('+','')
+        week_chg = float(week_chg_str) if week_chg_str else 0
+        month_chg = float(month_chg_str) if month_chg_str else 0
+    except (ValueError, TypeError, KeyError):
+        last_close = 0; ma5 = 0; ma20 = 0; ma60 = 0; rsi14 = 50; week_chg = 0; month_chg = 0
+    
+    # 趋势判断
+    if ma5 > ma20 > ma60:
+        trend = "看涨"; trend_detail = "均线多头排列"
+    elif ma5 < ma20 < ma60:
+        trend = "看跌"; trend_detail = "均线空头排列"
+    elif ma5 > ma20 and ma20 < ma60:
+        trend = "震荡"; trend_detail = "短期修复但中期承压"
+    elif ma5 < ma20 and ma20 > ma60:
+        trend = "震荡"; trend_detail = "短期回调但中期未破"
+    else:
+        trend = "震荡"; trend_detail = "均线交织，方向不明"
+    
+    # RSI 信号
+    if rsi14 > 70: rsi_signal = "RSI超买"
+    elif rsi14 < 30: rsi_signal = "RSI超卖"
+    else: rsi_signal = "RSI中性"
+    
+    # 支撑/阻力（基于MA20±2×ATR估算）
+    atr_est = max(last_close * 0.02, abs(ma20 - last_close) * 2) if last_close > 0 else 0.5
+    support = round(ma20 - atr_est * 2, 2) if ma20 > 0 else round(last_close * 0.95, 2)
+    resistance = round(ma20 + atr_est * 2, 2) if ma20 > 0 else round(last_close * 1.05, 2)
+    
+    # 交易建议
+    if trend == "看涨" and rsi14 < 60: advice = "买入"
+    elif trend == "看跌" and rsi14 > 40: advice = "卖出"
+    else: advice = "持有"
+    
+    # 仓位
+    if trend == "看涨": pos = min(int(50 + (60 - rsi14) * 1.5), 80) if rsi14 < 70 else 20
+    elif trend == "看跌": pos = max(int(30 - (rsi14 - 40) * 1.5), 5) if rsi14 > 40 else 50
+    else: pos = 30
+    
+    # 理由
+    parts = [f"{rsi_signal}({rsi14:.0f})"]
+    if week_chg > 3: parts.append(f"周涨{week_chg:+.1f}%")
+    elif week_chg < -3: parts.append(f"周跌{week_chg:+.1f}%")
+    if month_chg > 5: parts.append(f"月涨{month_chg:+.1f}%需警惕追高风险")
+    elif month_chg < -5: parts.append(f"月跌{month_chg:+.1f}%关注超跌反弹")
+    parts.append(trend_detail)
+    
+    return {
+        '趋势': trend,
+        '支撑位': f'{support:.2f}',
+        '阻力位': f'{resistance:.2f}',
+        '建议': advice,
+        '仓位': pos,
+        '理由': '，'.join(parts[:3]),
+        '行业背景': '规则化分析（API未可用时的自动兜底）',
+        '具体风险': f'{trend_detail}环境下关注均线支撑位',
+        '_fallback': True,
+    }
+
+
 def call_deepseek(symbol, sys_prompt, user_prompt, max_retries=2):
     """Call DeepSeek API with retry and 45s timeout.
     Robust JSON extraction: handles truncated output, multi-line strings, code fences."""
@@ -333,14 +402,10 @@ def analyze_one(symbol, name, stype, today_str):
     decision = call_deepseek(symbol, sys_prompt, user_prompt)
 
     if decision is None:
-        decision = {
-            "趋势": "无法判断",
-            "支撑位": "N/A",
-            "阻力位": "N/A",
-            "建议": "持有",
-            "仓位": 0,
-            "理由": "API调用失败，请手动分析"
-        }
+        print(f"  [{symbol}] API重试{max_retries}次仍失败，使用规则化fallback分析")
+        decision = _generate_concurrent_fallback(symbol, name, metrics)
+    elif isinstance(decision, dict) and decision.get('_fallback'):
+        print(f"  [{symbol}] 使用规则化fallback分析")
 
     section = f"""### {symbol} — {name}
 
