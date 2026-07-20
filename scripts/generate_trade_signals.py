@@ -1345,7 +1345,7 @@ def main():
                     section = section[:pos]
                     break
 
-        price = extract(section, '最新价').replace('¥', '').strip()
+        price = extract(section, '最新收盘价').replace('¥', '').strip()
         bias_val, bias_dir = calc_bias_direction(symbol)
         bias_display = f"{bias_val} {bias_dir}" if bias_dir else bias_val
         support = extract(section, '支撑位').replace('¥', '').strip()

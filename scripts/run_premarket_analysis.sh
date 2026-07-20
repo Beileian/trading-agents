@@ -133,11 +133,11 @@ while [ $GEN_RETRY -le $MAX_GEN_RETRIES ]; do
         EXIT_CODE=$?
         if [ $EXIT_CODE -eq 2 ]; then
             echo "[RETRY] Schema 校验失败 (exit=$EXIT_CODE)，重试第 $((GEN_RETRY+1))/$MAX_GEN_RETRIES 次..."
-            /usr/bin/python3 "$SCRIPT_DIR/trading_analysis_concurrent.py" "$DATE_STR" 2>&1 || echo "[WARN] 重新分析失败"
+            # 只重新生成信号（已有分析报告），不重跑全部10只标的
             GEN_RETRY=$((GEN_RETRY+1))
         elif [ $EXIT_CODE -eq 3 ]; then
             echo "[RETRY] Rubrics 门控拒绝 (exit=$EXIT_CODE)，重试第 $((GEN_RETRY+1))/$MAX_GEN_RETRIES 次..."
-            /usr/bin/python3 "$SCRIPT_DIR/trading_analysis_concurrent.py" "$DATE_STR" 2>&1 || echo "[WARN] 重新分析失败"
+            # 只重新生成信号（已有分析报告），不重跑全部10只标的
             GEN_RETRY=$((GEN_RETRY+1))
         else
             echo "[WARN] 交易推荐生成失败 (exit=$EXIT_CODE)，跳过"

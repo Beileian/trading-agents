@@ -243,13 +243,13 @@ def _generate_concurrent_fallback(symbol, name, metrics):
     """API不可用时的规则化fallback分析（直接复用run_analysis.py的模板逻辑）。"""
     # 从metrics字典中提取技术指标
     try:
-        last_close = float(metrics.get('最新价', '0').replace('¥',''))
+        last_close = float(metrics.get('最新收盘价', '0').replace('¥',''))
         ma5 = float(metrics.get('MA5', '0').replace('¥',''))
         ma20 = float(metrics.get('MA20', '0').replace('¥',''))
         ma60 = float(metrics.get('MA60', '0').replace('¥',''))
         rsi14 = float(metrics.get('RSI(14)', '50'))
-        week_chg_str = metrics.get('周涨跌', '0%').replace('%','').replace('+','')
-        month_chg_str = metrics.get('月涨跌', '0%').replace('%','').replace('+','')
+        week_chg_str = metrics.get('1日涨跌', '0%').replace('%','').replace('+','')
+        month_chg_str = metrics.get('20日涨跌', '0%').replace('%','').replace('+','')
         week_chg = float(week_chg_str) if week_chg_str else 0
         month_chg = float(month_chg_str) if month_chg_str else 0
     except (ValueError, TypeError, KeyError):
@@ -308,9 +308,13 @@ def _generate_concurrent_fallback(symbol, name, metrics):
     }
 
 
-def call_deepseek(symbol, sys_prompt, user_prompt, max_retries=2):
+DEFAULT_MAX_RETRIES = 2
+
+def call_deepseek(symbol, sys_prompt, user_prompt, max_retries=None):
     """Call DeepSeek API with retry and 45s timeout.
     Robust JSON extraction: handles truncated output, multi-line strings, code fences."""
+    if max_retries is None:
+        max_retries = DEFAULT_MAX_RETRIES
     headers = {
         "Authorization": f"Bearer {DEEPSEEK_KEY}",
         "Content-Type": "application/json",
@@ -322,7 +326,8 @@ def call_deepseek(symbol, sys_prompt, user_prompt, max_retries=2):
             {"role": "user", "content": user_prompt},
         ],
         "temperature": 0.3,
-        "max_tokens": 800,
+        "max_tokens": 1200,
+        "response_format": {"type": "json_object"},
     }
 
     for attempt in range(max_retries):
@@ -402,7 +407,7 @@ def analyze_one(symbol, name, stype, today_str):
     decision = call_deepseek(symbol, sys_prompt, user_prompt)
 
     if decision is None:
-        print(f"  [{symbol}] API重试{max_retries}次仍失败，使用规则化fallback分析")
+        print(f"  [{symbol}] API重试{DEFAULT_MAX_RETRIES}次仍失败，使用规则化fallback分析")
         decision = _generate_concurrent_fallback(symbol, name, metrics)
     elif isinstance(decision, dict) and decision.get('_fallback'):
         print(f"  [{symbol}] 使用规则化fallback分析")

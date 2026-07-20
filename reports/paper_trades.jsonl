@@ -1,2 +1,13 @@
 {"date": "2026-06-16", "code": "sh601288", "name": "农业银行", "action": "buy", "shares": 1400, "price": 6.68, "amount": 9352.0, "commission": 2.34, "stamp_duty": 0, "reason": "突破6.69加仓 / 跌破6.49减仓"}
 {"date": "2026-06-19", "code": "sh562500", "name": "中证机器人", "action": "buy", "shares": 100, "price": 1.17, "amount": 117.0, "commission": 0.03, "stamp_duty": 0, "reason": "突破1.23加仓 / 跌破1.13减仓"}
+{"date": "2026-06-25", "code": "600562", "name": "国睿科技", "action": "sell", "shares": 400, "price": 21.28, "amount": 8512.0, "commission": 2.13, "stamp_duty": 8.51, "reason": "破位下行，检查基本面是否变化"}
+{"date": "2026-06-26", "code": "601288", "name": "农业银行", "action": "buy", "shares": 1200, "price": 6.34, "amount": 7608.0, "commission": 1.9, "stamp_duty": 0, "reason": "估值区间下沿，关注加仓窗口 [复盘:外盘连续偏离]"}
+{"date": "2026-06-26", "code": "601988", "name": "中国银行", "action": "sell", "shares": 1200, "price": 6.02, "amount": 7224.0, "commission": 1.81, "stamp_duty": 7.22, "reason": "破位下行，检查基本面是否变化"}
+{"date": "2026-06-26", "code": "600036", "name": "招商银行", "action": "sell", "shares": 400, "price": 36.76, "amount": 14704.0, "commission": 3.68, "stamp_duty": 14.7, "reason": "破位下行，检查基本面是否变化"}
+{"date": "2026-06-26", "code": "600795", "name": "国电电力", "action": "sell", "shares": 300, "price": 4.71, "amount": 1413.0, "commission": 0.35, "stamp_duty": 1.41, "reason": "破位下行，检查基本面是否变化"}
+{"date": "2026-06-26", "code": "601288", "name": "农业银行", "action": "buy", "shares": 100, "price": 6.25, "amount": 625.0, "commission": 0.16, "stamp_duty": 0, "reason": "估值区间下沿，关注加仓窗口 [复盘:外盘连续偏离]"}
+{"date": "2026-06-29", "code": "601288", "name": "农业银行", "action": "sell", "shares": 5300, "price": 6.25, "amount": 33125.0, "commission": 8.28, "stamp_duty": 33.12, "reason": "破位下行，检查基本面是否变化"}
+{"date": "2026-06-29", "code": "562500", "name": "机器人ETF", "action": "buy", "shares": 27600, "price": 1.1, "amount": 30360.0, "commission": 7.59, "stamp_duty": 0, "reason": "估值区间下沿，关注加仓窗口 [复盘:外盘连续偏离]"}
+{"date": "2026-06-29", "code": "562500", "name": "机器人ETF", "action": "buy", "shares": 19400, "price": 1.1, "amount": 21340.0, "commission": 5.33, "stamp_duty": 0, "reason": "估值区间下沿，关注加仓窗口 [复盘:外盘连续偏离]"}
+{"date": "2026-07-06", "code": "000066", "name": "中国长城", "action": "sell", "shares": 600, "price": 17.29, "amount": 10374.0, "commission": 2.59, "stamp_duty": 10.37, "reason": "破位下行，检查基本面是否变化"}
+{"date": "2026-07-09", "code": "562500", "name": "机器人ETF", "action": "sell", "shares": 49500, "price": 1.08, "amount": 53460.0, "commission": 13.37, "stamp_duty": 53.46, "reason": "破位下行，检查基本面是否变化 [复盘:卖出高误判]"}
