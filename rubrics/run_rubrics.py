@@ -105,9 +105,15 @@ def load_rubric(rubric_file: str = None) -> dict:
         return json.load(f)
 
 
-def evaluate_llm_item(item: dict, report_text: str, analysis_text: str = "") -> dict:
-    """对 LLM 评判项进行评估"""
-    prompt = item["prompt"] + "\n\n--- 以下是待评估的交易推荐信号表 ---\n\n" + report_text
+def evaluate_llm_item(item: dict, report_text: str, analysis_text: str = "", seed_date: str = None) -> dict:
+    """对 LLM 评判项进行评估。支持 variant_pool 随机化（方案二）"""
+    # 随机抽取 variant（如果 item 有 variant_pool）
+    sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+    from variant_selector import select_variant
+    base_prompt, variant_idx = select_variant(item, seed_date)
+    if variant_idx >= 0:
+        print(f"    ↳ variant#{variant_idx}", file=sys.stderr)
+    prompt = base_prompt + "\n\n--- 以下是待评估的交易推荐信号表 ---\n\n" + report_text
     if analysis_text:
         # 取每只标的的推理部分（DeepSeek 交易决策 表格后的简要理由），不超过 3000 字
         import re as _re
