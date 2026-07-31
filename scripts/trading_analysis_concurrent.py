@@ -327,6 +327,7 @@ def call_deepseek(symbol, sys_prompt, user_prompt, max_retries=None):
         ],
         "temperature": 0.3,
         "max_tokens": 1200,
+        "thinking": {"type": "disabled"},  # 思考模型铁律：防 content 恒空
         "response_format": {"type": "json_object"},
     }
 

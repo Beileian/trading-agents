@@ -315,6 +315,7 @@ def call_deepseek(indicators, api_key):
         ],
         "temperature": 0.3,
         "max_tokens": 400,
+        "thinking": {"type": "disabled"}  # 思考模型铁律：防 content 恒空
     }
 
     last_error = None

@@ -84,7 +84,8 @@ def main():
                 "model": MODEL,
                 "messages": [{"role": "user", "content": prompt}],
                 "max_tokens": 150,
-                "temperature": 0.3
+                "temperature": 0.3,
+                "thinking": {"type": "disabled"}  # 思考模型铁律：防 content 恒空
             })
             resp = subprocess.run(
                 ['curl', '-s', DEEPSEEK_URL,

@@ -233,6 +233,7 @@ def call_deepseek(system_prompt, user_prompt, max_retries=3):
         ],
         "temperature": 0.3,
         "max_tokens": 1024,
+        "thinking": {"type": "disabled"},  # 思考模型铁律：防 content 恒空
     }
 
     for attempt in range(max_retries):

@@ -129,8 +129,9 @@ def retry_generation_with_fix(prompt: str) -> str:
         json={
             "model": MODEL,
             "messages": [{"role": "user", "content": prompt}],
-            "max_tokens": 4000,
+            "max_tokens": 8000,
             "temperature": 0.3,
+            # 保思维链：不设 thinking:disabled，靠大 max_tokens 防 content 恒空
         },
         timeout=120
     )

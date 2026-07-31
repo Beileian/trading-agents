@@ -52,7 +52,7 @@ def _get_deepseek_key():
     return ""
 
 
-def call_llm(prompt: str, max_tokens: int = 1536) -> str:
+def call_llm(prompt: str, max_tokens: int = 8000) -> str:
     """调用 DeepSeek 做 LLM 评判"""
     import requests
     key = _get_deepseek_key()
@@ -66,8 +66,9 @@ def call_llm(prompt: str, max_tokens: int = 1536) -> str:
             "messages": [{"role": "user", "content": prompt}],
             "max_tokens": max_tokens,
             "temperature": 0.1,
+            # 保思维链：不设 thinking:disabled，靠大 max_tokens 防 content 恒空
         },
-        timeout=30
+        timeout=60
     )
     resp.raise_for_status()
     return resp.json()['choices'][0]['message']['content'].strip()
@@ -141,7 +142,7 @@ def evaluate_llm_item(item: dict, report_text: str, analysis_text: str = "", see
     last_error = None
     for retry in range(3):
         try:
-            llm_output = call_llm(prompt, max_tokens=2048)
+            llm_output = call_llm(prompt, max_tokens=8000)
             break
         except Exception as e:
             last_error = str(e)
