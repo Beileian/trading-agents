@@ -676,6 +676,53 @@ def review_signal_quality() -> list[str]:
     return lines
 
 
+def load_intraday_alerts():
+    """读取盘中预警 JSONL（price_watch 写入），供收盘验证命中率。"""
+    alert_file = f"{PROJECT_DIR}/logs/price_alerts_{TODAY_TAG}.jsonl"
+    if not os.path.exists(alert_file):
+        return []
+    alerts = []
+    with open(alert_file) as f:
+        for line in f:
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                alerts.append(json.loads(line))
+            except json.JSONDecodeError:
+                continue
+    return alerts
+
+
+def compute_intraday_alert_hit_rate(alerts, prices):
+    """盘中穿越预警 vs 收盘价验证（P1-3 闭环）：
+    支撑预警命中 = 收盘价 <= 预警时 level；阻力预警命中 = 收盘价 >= 预警时 level。
+    返回 (hit, total, miss_names)。源偏差降级的待确认提示不参与命中率。
+    """
+    hits, total = 0, 0
+    miss_names = []
+    for a in alerts:
+        if a.get("type") not in ("支撑", "阻力"):
+            continue
+        if a.get("degraded"):
+            continue
+        name = a.get("name")
+        if name not in prices:
+            continue
+        close = prices[name].get("price")
+        level = a.get("level")
+        if level is None or close is None:
+            continue
+        total += 1
+        if a["type"] == "支撑" and close <= level:
+            hits += 1
+        elif a["type"] == "阻力" and close >= level:
+            hits += 1
+        else:
+            miss_names.append(f"{name}({a['type']}@{level}→收{close:.2f})")
+    return hits, total, miss_names
+
+
 def update_cognition_state(prices, thresholds, overseas_dir, overseas_conf, regime_alerts=None):
     """Writes structured review metrics to cognition_state.json for next-day feedback."""
     state_file = f"{PROJECT_DIR}/logs/cognition_state.json"
@@ -770,10 +817,30 @@ def update_cognition_state(prices, thresholds, overseas_dir, overseas_conf, regi
     if bh_3d is not None:
         bh["label"] = "high_signal" if bh_3d >= 2 else ("low_signal" if bh_3d <= 0.5 else "neutral")
 
+    # 3b. 盘中预警命中率（P1-3 闭环：price_watch JSONL → 收盘验证）
+    intraday_alerts = load_intraday_alerts()
+    ahit, atotal, amiss = compute_intraday_alert_hit_rate(intraday_alerts, prices)
+    ah = m.get("intraday_alert_hit_rate", {})
+    ah_hist = ah.get("history", [])
+    if atotal > 0:
+        ah_rate = round(ahit / atotal, 3)
+        ah_hist.append(ah_rate)
+        ah_hist = ah_hist[-5:]
+        ah_3d = sum(ah_hist) / len(ah_hist) if ah_hist else None
+        ah["history"] = ah_hist
+        ah["rolling_5d"] = ah_3d
+        if ah_3d is not None:
+            ah["label"] = "accurate" if ah_3d >= 0.6 else ("unreliable" if ah_3d <= 0.4 else "neutral")
+    else:
+        # 无穿越预警日：不污染历史，保留原历史
+        ah["rolling_5d"] = ah.get("rolling_5d")
+        ah["label"] = ah.get("label", "no_alerts")
+
     state["metrics"] = {
         "overseas_direction_accuracy": oa,
         "sell_misrate": sm,
         "breach_hit_rate": bh,
+        "intraday_alert_hit_rate": ah,
     }
 
     # ── 5. Last review snapshot ──
@@ -812,6 +879,10 @@ def update_cognition_state(prices, thresholds, overseas_dir, overseas_conf, regi
         "sell_wrong_names": sell_wrong,
         "breach_count": breach_count,
         "breach_names": breach_names,
+        "intraday_alert_stats": {
+            "hit": ahit, "total": atotal, "miss_names": amiss,
+            "hit_rate": round(ahit / atotal, 3) if atotal > 0 else None,
+        },
         "extreme_stocks": extreme_stocks,
         "cognitive_tag": tag,
         "calibration_hint": hint,
@@ -861,6 +932,14 @@ def update_cognition_state(prices, thresholds, overseas_dir, overseas_conf, regi
                           f"{bn_str}日内击穿支撑或阻力，{vol_level}。")
     else:
         review_lines.append(f"无价格穿越触发，支撑阻力位保持有效。")
+
+    # 盘中预警命中率（P1-3 闭环反馈）
+    if atotal > 0:
+        ah_rate_str = f"{ahit}/{atotal}（{ahit/atotal*100:.0f}%）"
+        if amiss:
+            review_lines.append(f"盘中预警命中{ah_rate_str}，未命中：{'、'.join(amiss[:3])}。")
+        else:
+            review_lines.append(f"盘中预警命中{ah_rate_str}，全部有效。")
 
     # 极端波动
     if extreme_stocks:

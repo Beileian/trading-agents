@@ -1,9 +1,22 @@
 #!/usr/bin/env python3
 """
-金桥量化交易推荐系统 v3.3.0
+金桥量化交易推荐系统 v3.4.0
 
 版本历史:
-  v3.3.0 (2026-07-09): P0 稳定性 — 并发技术分析 + 断点续跑
+  v3.4.0 (2026-08-05): 标的检测链路评审落地 P0-P2（评审来源：托董标的检测提醒全面评审）
+    - P0-1 冻结识别强化: price_fetcher 冻结状态跨运行持久化(price_freeze_state.json)，
+      连续3轮价格不变→warning、5轮→stale；昨收匹配增强怀疑；
+      源整体冻结占比≥80%→自动降级30分钟；踢源逻辑改为优先保留变化源
+    - P0-2 穿越判定源一致性门: price_watch 主备源偏差>1.5%时穿越预警降级为状态提示(待确认)，
+      杜绝临界误报（实证: 沪深300 eastmoney 4675.38 vs 阻力4675.25 的0.13临界触发）
+    - P1-3 预警命中率闭环: price_watch 每条预警写 JSONL(触发源/价格/时间戳/偏差)，
+      closing_review 收盘比对 → intraday_alert_hit_rate 指标 + 复盘摘要反馈
+    - P1-4 噪音控制: 异动信号(935/开盘/尾盘)午后(≥14点)起转状态提示合并推送，
+      去重改为 slot 维度(early/mid/afternoon/tail) + 命名空间隔离(穿越vs降级)
+    - P2-5 event_chain 接入调度(08:10 周一至五 --auto，数据源修复为 morning_brief)；
+      send_to_dingtalk 密钥强校验(硬编码→.env，缺失即报错)
+    - P2-6 SINA_MAP 与 WATCHLIST 对齐: price_watch 补机器人ETF(异动检测覆盖)
+
     - trading_analysis_concurrent.py v1.0.0: ThreadPoolExecutor 并发分析（MAX_WORKERS=5）
       - 10只标的从串行6-10分钟压缩到~1分钟
       - 每个标的独立 DeepSeek API 调用，45s 超时 + 2次重试

@@ -11,9 +11,30 @@
 
 import os, sys, json, requests
 
-DINGTALK_APP_KEY = os.getenv("DINGTALK_APP_KEY", "dingmvin6gkm96gookpo")
-DINGTALK_APP_SECRET = os.getenv("DINGTALK_APP_SECRET", "5l6HvoMYkAK3AMPMDYpvnVCP7X-jCKOIweQGY0re5tSZLpQlL4UpNZUE2KxJVqzA")
-GROUP_CID = os.getenv("DINGTALK_GROUP_CID", "cidY4mlx+J2kNFpTiWFgQ0gkg==")
+# ── 密钥管理：环境变量 → 项目 .env → 强校验报错（禁止代码内硬编码） ──
+_ENV_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", ".env")
+
+
+def _load_secret(name: str) -> str:
+    """从环境变量或项目 .env 读取密钥，缺失直接抛错（强校验）。"""
+    val = os.getenv(name)
+    if val:
+        return val.strip()
+    if os.path.exists(_ENV_FILE):
+        try:
+            with open(_ENV_FILE) as f:
+                for line in f:
+                    line = line.strip()
+                    if line.startswith(name + "="):
+                        return line.split("=", 1)[1].strip().strip('"\'')
+        except Exception:
+            pass
+    raise RuntimeError(f"缺少必需配置 {name}：请设置环境变量或写入 {_ENV_FILE}")
+
+
+DINGTALK_APP_KEY = _load_secret("DINGTALK_APP_KEY")
+DINGTALK_APP_SECRET = _load_secret("DINGTALK_APP_SECRET")
+GROUP_CID = _load_secret("DINGTALK_GROUP_CID")
 API_BASE = "https://api.dingtalk.com"
 MAX_CHARS = 18000  # 钉钉 sampleMarkdown 单条约 20KB 限制，留余量
 

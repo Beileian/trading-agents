@@ -31,6 +31,10 @@ from typing import Optional
 from pathlib import Path
 
 PROJECT_DIR = Path("/root/.openclaw/workspace/projects/trading-agents")
+FREEZE_STATE_FILE = PROJECT_DIR / "logs" / "price_freeze_state.json"
+FREEZE_ROUNDS_ALERT = 3      # 连续N轮价格不变 → 标记 warning
+FREEZE_ROUNDS_STALE = 5      # 连续N轮价格不变 → 标记 stale
+FREEZE_RATIO_GLOBAL = 0.8    # 某源冻结标的占比 ≥80% → 整体冻结降级
 
 # ── 标的映射 ──
 # {trading_code: {tencent, eastmoney, sina}}
@@ -60,6 +64,8 @@ class PricePoint:
     source: str           # tencent / eastmoney / sina / cross_verified
     source_chain: str     # 交叉验证链: tencent✓east, tencent(solo), east→tencent✗→sina
     quality: str          # verified / warning / unverified / stale
+    deviation_pct: float = 0.0  # 主备源交叉偏差% (0=单源)
+    frozen: bool = False        # 主源是否被冻结检测标记
     timestamp: float = field(default_factory=time.time)
 
 
@@ -70,8 +76,7 @@ class PriceFetcher:
         self._degraded_sources = {}  # {source: degraded_until_ts}
         self._error_counts = {}      # {source: consecutive_errors}
         self._cross_log = []         # 最近交叉验证记录
-        self._last_prices = {}       # {source_code: last_price} 用于检测数据冻结
-        self._frozen_rounds = {}     # {source: consecutive_frozen_rounds}
+        self._freeze_state = self._load_freeze_state()  # 跨运行持久化冻结状态
 
     # ═══ 腾讯财经 ═══
     def _fetch_tencent(self) -> dict[str, dict]:
@@ -228,8 +233,14 @@ print(json.dumps(results, ensure_ascii=False))
         return results
 
     # ═══ 交叉验证 ═══
-    def _cross_verify(self, code: str, name: str, is_index: bool, t1: dict, t2: dict, t3: dict = None) -> PricePoint:
-        """交叉验证。is_index: 指数主线是东方财富，个股主线是腾讯。"""
+    def _cross_verify(self, code: str, name: str, is_index: bool, t1: dict, t2: dict, t3: dict = None,
+                      frozen: dict = None) -> PricePoint:
+        """交叉验证。is_index: 指数主线是东方财富，个股主线是腾讯。
+        frozen: {"tencent": bool, "eastmoney": bool} 该标的是否被冻结检测标记。
+        踢源规则: 偏差>3% 时优先保留未冻结（变化中）的源，踢冻结源；
+                  都冻结或都正常时保留主源逻辑（指数→东方, 个股→腾讯）。
+        """
+        frozen = frozen or {}
         t1_price = t1.get("price") if t1 else None
         t2_price = t2.get("price") if t2 else None
         t3_price = t3.get("price") if t3 else None
@@ -245,21 +256,51 @@ print(json.dumps(results, ensure_ascii=False))
         p_price = p_data.get("price") if p_data else None
         b_price = b_data.get("price") if b_data else None
 
+        deviation = 0.0
+        switched = False
         if p_price and b_price:
             deviation = abs(p_price - b_price) / b_price * 100 if b_price else 0
+            p_frozen = frozen.get(p_name, False)
+            b_frozen = frozen.get(b_name, False)
             if deviation < 1.0:
                 chain = f"{p_name}✓{b_name}({deviation:.1f}%)"
                 quality = "verified"
-                # 主源通过
+                if p_frozen:
+                    # 双源一致但主源冻结：保留主源，降级 warning 提示
+                    quality = "warning"
+                    chain += ".frozen"
+                    print(f"[冻结检测⚠️] {name}: {p_name}冻结但与{b_name}一致({deviation:.1f}%)，降级warning")
             elif deviation < 3.0:
-                chain = f"{p_name}~{b_name}(Δ{deviation:.1f}%)"
-                quality = "warning"
-                print(f"[交叉验证⚠️] {name}: {p_name}{p_price} vs {b_name}{b_price} Δ{deviation:.1f}%")
+                # 1-3% 区间：主源冻结时优先切未冻结备份源（冻结源不可信）
+                if p_frozen and not b_frozen:
+                    print(f"[交叉验证⚠️] {name}: {p_name}冻结({p_price}) vs {b_name}({b_price}) Δ{deviation:.1f}%，切未冻结源{b_name}")
+                    p_data, p_name = b_data, b_name
+                    chain = f"{p_name}(unfrozen)"
+                    quality = "warning"
+                elif b_frozen and not p_frozen:
+                    # 备份冻结、主源正常：保留主源，降级提示
+                    chain = f"{p_name}~{b_name}(Δ{deviation:.1f}%)"
+                    quality = "warning"
+                    print(f"[交叉验证⚠️] {name}: {p_name}{p_price} vs {b_name}冻结({b_price}) Δ{deviation:.1f}%")
+                else:
+                    chain = f"{p_name}~{b_name}(Δ{deviation:.1f}%)"
+                    quality = "warning"
+                    print(f"[交叉验证⚠️] {name}: {p_name}{p_price} vs {b_name}{b_price} Δ{deviation:.1f}%")
             else:
-                # 主源偏差大，切备份源
-                print(f"[交叉验证🚨] {name}: {p_name}{p_price} vs {b_name}{b_price} Δ{deviation:.1f}%，踢掉{p_name}")
-                self._record_error(p_name, f"cross_fail:{name}")
-                p_data, p_name = b_data, b_name
+                # 偏差>3%：优先保留变化源（未冻结方）
+                if p_frozen and not b_frozen:
+                    print(f"[交叉验证🚨] {name}: {p_name}冻结({p_price}) vs {b_name}({b_price}) Δ{deviation:.1f}%，踢冻结源{p_name}")
+                    self._record_error(p_name, f"frozen_cross:{name}")
+                    p_data, p_name = b_data, b_name
+                    switched = True
+                elif b_frozen and not p_frozen:
+                    # 备份冻结、主源正常：保留主源，不切
+                    print(f"[交叉验证🚨] {name}: {p_name}({p_price}) vs {b_name}冻结({b_price}) Δ{deviation:.1f}%，保留变化源{p_name}")
+                else:
+                    print(f"[交叉验证🚨] {name}: {p_name}{p_price} vs {b_name}{b_price} Δ{deviation:.1f}%，踢掉{p_name}")
+                    self._record_error(p_name, f"cross_fail:{name}")
+                    p_data, p_name = b_data, b_name
+                    switched = True
                 # 备份源与第三源交叉
                 if t3 and t3_price:
                     dev2 = abs(p_price - t3_price) / t3_price * 100 if t3_price else 0
@@ -285,7 +326,8 @@ print(json.dumps(results, ensure_ascii=False))
             print(f"[交叉验证🚨] {name}: 所有数据源不可用！")
             return PricePoint(
                 name=name, price=0, prev_close=0, open=0, high=0, low=0,
-                change_pct=0, source="none", source_chain="all_failed", quality="stale"
+                change_pct=0, source="none", source_chain="all_failed", quality="stale",
+                deviation_pct=0.0, frozen=False,
             )
 
         data = p_data
@@ -300,7 +342,54 @@ print(json.dumps(results, ensure_ascii=False))
             source=p_name,
             source_chain=chain,
             quality=quality,
+            deviation_pct=round(deviation, 2),
+            frozen=frozen.get(p_name, False),
         )
+
+    # ═══ 冻结检测（跨运行持久化） ═══
+    def _load_freeze_state(self) -> dict:
+        """加载持久化冻结状态。每次 cron 运行是新进程，实例级状态不累积，
+        必须落盘才能跨 5 分钟轮次识别冻结。"""
+        try:
+            if FREEZE_STATE_FILE.exists():
+                with open(FREEZE_STATE_FILE) as f:
+                    return json.load(f)
+        except Exception as e:
+            print(f"[freeze] 状态加载失败: {e}")
+        return {"tencent": {}, "eastmoney": {}, "sina": {}}
+
+    def _save_freeze_state(self):
+        try:
+            FREEZE_STATE_FILE.parent.mkdir(parents=True, exist_ok=True)
+            tmp = str(FREEZE_STATE_FILE) + ".tmp"
+            with open(tmp, "w") as f:
+                json.dump(self._freeze_state, f)
+            os.replace(tmp, str(FREEZE_STATE_FILE))
+        except Exception as e:
+            print(f"[freeze] 状态保存失败: {e}")
+
+    def _update_freeze(self, source: str, skey: str, price: float, prev_close: float) -> dict:
+        """更新某源某标的冻结轮数。
+        返回: {frozen: bool, rounds: int, prev_close_match: bool}
+        规则: 连续 FREEZE_ROUNDS_ALERT 轮价格不变 → 冻结；
+              若价格同时停在昨收不动 → 更可疑（交易时段价格不应停在昨收）。
+        """
+        state = self._freeze_state.setdefault(source, {})
+        rec = state.get(skey, {"last": None, "rounds": 0})
+        rounds = 0
+        prev_close_match = False
+        if rec.get("last") is not None and price > 0:
+            if abs(price - rec["last"]) < 0.001:
+                rounds = rec.get("rounds", 0) + 1
+                if prev_close and abs(price - prev_close) < 0.001:
+                    prev_close_match = True
+            else:
+                rounds = 0
+        rec.update({"last": price, "rounds": rounds,
+                    "prev_close_match": prev_close_match, "ts": time.time()})
+        state[skey] = rec
+        return {"frozen": rounds >= FREEZE_ROUNDS_ALERT, "rounds": rounds,
+                "prev_close_match": prev_close_match}
 
     # ═══ 动态降级 ═══
     def _record_error(self, source: str, detail: str):
@@ -334,6 +423,41 @@ print(json.dumps(results, ensure_ascii=False))
         east_data = self._fetch_eastmoney() if fetch_east else {}
         sina_data = self._fetch_sina() if fetch_sina else {}
 
+        # ═══ 逐源冻结检测（跨运行持久化） ═══
+        # 对每个源的原始返回逐标的更新冻结轮数，得到 {source: {skey}}
+        frozen_by_source = {"tencent": set(), "eastmoney": set(), "sina": set()}
+        source_pool = {"tencent": tc_data, "eastmoney": east_data, "sina": sina_data}
+        for sname, sdata in source_pool.items():
+            for code, cfg in WATCHLIST.items():
+                if sname == "tencent":
+                    skey = cfg.get("tencent")
+                elif sname == "eastmoney":
+                    skey = cfg["east"].split(".")[-1]
+                else:
+                    skey = cfg.get("sina") if cfg["type"] == "stock" else None
+                if not skey or skey not in sdata:
+                    continue
+                raw = sdata[skey]
+                if not raw.get("price"):
+                    continue
+                fz = self._update_freeze(sname, skey, raw["price"], raw.get("prev_close") or 0)
+                if fz["frozen"]:
+                    frozen_by_source[sname].add(skey)
+                    if fz["rounds"] == FREEZE_ROUNDS_ALERT:
+                        print(f"[冻结检测⚠️] {cfg['name']}: {sname}连续{fz['rounds']}轮价格未变 ({raw['price']:.3f})" + ("，且停在昨收" if fz["prev_close_match"] else ""))
+
+        # 整体冻结：某源冻结标的占比 ≥80% → 该源整体降级 30 分钟
+        for sname, frozen_set in frozen_by_source.items():
+            if sname == "sina":
+                total = sum(1 for cfg in WATCHLIST.values() if cfg["type"] == "stock")
+            else:
+                total = sum(1 for cfg in WATCHLIST.values() if cfg.get(sname))
+            if total >= 3 and len(frozen_set) >= total * FREEZE_RATIO_GLOBAL:
+                print(f"[冻结检测🚨] {sname} 整体冻结（{len(frozen_set)}/{total}标的），降级30分钟并切备用源")
+                self._degraded_sources[sname] = time.time() + 1800
+                frozen_by_source[sname] = set()  # 整体降级后本轮不再逐标处理
+        self._save_freeze_state()
+
         for code, cfg in WATCHLIST.items():
             name = cfg["name"]
             tc_code = cfg["tencent"]
@@ -344,31 +468,11 @@ print(json.dumps(results, ensure_ascii=False))
             t2 = east_data.get(east_code)
             t3 = sina_data.get(sina_code) if sina_code else None
 
-            pp = self._cross_verify(code, name, cfg["type"] == "index", t1, t2, t3)
-
-            # ═══ 冻结检测 ═══
-            # 数据冻结：当前价格与上一轮完全一致（合理精度范围内），连续多轮抛出
-            last = self._last_prices.get(code)
-            if pp.price > 0 and last is not None:
-                # 价格未变（精度0.001以内）
-                if abs(pp.price - last) < 0.001:
-                    self._frozen_rounds[code] = self._frozen_rounds.get(code, 0) + 1
-                    frozen_n = self._frozen_rounds[code]
-                    if frozen_n == 3:
-                        print(f"[冻结检测⚠️] {name}: 价格连续{frozen_n}轮未变 ({pp.price:.3f})，标记warning")
-                        pp.quality = "warning"
-                        pp.source_chain = pp.source_chain + ".frozen"
-                    elif frozen_n >= 5:
-                        print(f"[冻结检测🚨] {name}: 价格连续{frozen_n}轮未变 ({pp.price:.3f})，标记stale")
-                        pp.quality = "stale"
-                        pp.change_pct = 0
-                else:
-                    # 价格变了，重置计数
-                    self._frozen_rounds[code] = 0
-
-            # 更新历史
-            if pp.price > 0:
-                self._last_prices[code] = pp.price
+            frozen = {
+                "tencent": tc_code in frozen_by_source.get("tencent", set()),
+                "eastmoney": east_code in frozen_by_source.get("eastmoney", set()),
+            }
+            pp = self._cross_verify(code, name, cfg["type"] == "index", t1, t2, t3, frozen=frozen)
 
             results[name] = pp
 

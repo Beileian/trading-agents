@@ -30,6 +30,7 @@ SINA_MAP = {
     "sh600795": ("600795", "国电电力"),
     "sz000066": ("000066", "中国长城"),
     "sh600562": ("600562", "国睿科技"),
+    "sh562500": ("562500", "机器人ETF"),
 }
 
 # 智兔 API（备份）
@@ -315,9 +316,13 @@ def fetch_zhitu_prices():
             pass
     return prices
 
-def check_breaches(prices, thresholds):
-    """检测价格穿越支撑/阻力位"""
+def check_breaches(prices, thresholds, pp_map=None, consistency_gate=1.5):
+    """检测价格穿越支撑/阻力位。
+    pp_map: {name: PricePoint} 用于源一致性门。
+    consistency_gate: 主备源偏差%超过该值时不触发穿越预警（数据不可信），降级为状态提示。
+    """
     alerts = []
+    degraded = []  # 源偏差过大降级的状态提示（不推送为穿越预警）
     for name, t in thresholds.items():
         if name not in prices:
             continue
@@ -325,23 +330,39 @@ def check_breaches(prices, thresholds):
         support = t['support']
         resistance = t['resistance']
 
+        # 源一致性门：偏差过大时数据不可信，不触发穿越
+        dev = 0.0
+        if pp_map and name in pp_map:
+            dev = getattr(pp_map[name], 'deviation_pct', 0.0) or 0.0
+        gate_breach = dev > consistency_gate
+
         if price <= support:
             gap = (support - price) / price * 100
-            alerts.append({
+            item = {
                 'name': name, 'price': price, 'type': '支撑',
                 'level': support, 'gap': gap,
                 'msg': f"🔴 {name} 跌破支撑 {support}（现价 {price:.2f}，破位 {gap:.1f}%）"
-            })
+            }
+            if gate_breach:
+                item['msg'] = f"⚠️ {name} 盘中触及支撑 {support}（现价 {price:.2f}，源偏差{dev:.1f}%，待确认）"
+                degraded.append(item)
+            else:
+                alerts.append(item)
 
         if price >= resistance:
             gap = (price - resistance) / resistance * 100
-            alerts.append({
+            item = {
                 'name': name, 'price': price, 'type': '阻力',
                 'level': resistance, 'gap': gap,
                 'msg': f"🟢 {name} 突破阻力 {resistance}（现价 {price:.2f}，超涨 {gap:.1f}%）"
-            })
+            }
+            if gate_breach:
+                item['msg'] = f"⚠️ {name} 盘中触及阻力 {resistance}（现价 {price:.2f}，源偏差{dev:.1f}%，待确认）"
+                degraded.append(item)
+            else:
+                alerts.append(item)
 
-    return alerts
+    return alerts, degraded
 
 
 def check_intraday_anomalies(prices):
@@ -413,8 +434,8 @@ def check_intraday_anomalies(prices):
                         pass
 
         # ── 信号2: 开盘拉升（高开回补创新高模式）──
-        # 条件: 非指数 + 当前价从开盘价拉升 > 2%
-        if open_price > 0:
+        # 条件: 非指数 + 当前价从开盘价拉升 > 2%，仅在开盘后 90 分钟内检测（避免午后重复触发）
+        if open_price > 0 and 9*60+30 <= minutes <= 11*60:
             open_rise = (price - open_price) / open_price * 100
             if open_rise > 2:
                 alerts.append({
@@ -424,8 +445,8 @@ def check_intraday_anomalies(prices):
                 })
 
         # ── 信号3: 尾盘拉升 ──
-        # 条件: 14:50后 + 从日内低点拉回 > 1.5%
-        if 14*60+50 <= minutes <= 15*60 and low > 0:
+        # 条件: 14:30后 + 从日内低点拉回 > 1.5%（放宽至14:30便于尾盘异动捕捉）
+        if 14*60+30 <= minutes <= 15*60 and low > 0:
             recovery = (price - low) / low * 100
             if recovery > 1.5:
                 alerts.append({
@@ -436,13 +457,21 @@ def check_intraday_anomalies(prices):
 
     return alerts
 
-def dedup_alerts(alerts):
-    """去重：同一标的同方向 30 分钟内不重复，跨日自动清理旧状态"""
+def dedup_alerts(alerts, slot=None, namespace=""):
+    """去重：同一标的同方向同时段内不重复（slot 维度），跨日自动清理旧状态。
+    slot: early(早盘)/mid(盘中)/afternoon(午后)/tail(尾盘)，None 时按当前时间推断。
+    namespace: 区分穿越/降级两条去重链（午后异动转降级提示用）。
+    实现单标的单时段推送上限（每时段每类型最多 1 条）。"""
     state_file = f"{PROJECT_DIR}/logs/price_alerts_state.json"
     os.makedirs(os.path.dirname(state_file), exist_ok=True)
 
     today = datetime.now(TZ).strftime("%Y%m%d")
     now = datetime.now(TZ).timestamp()
+
+    # 推断时段
+    if slot is None:
+        h = datetime.now(TZ).hour
+        slot = 'tail' if h >= 14 else ('afternoon' if h >= 13 else ('mid' if h >= 10 else 'early'))
 
     # 读取旧状态，清理非今日记录
     state = {}
@@ -450,33 +479,14 @@ def dedup_alerts(alerts):
         with open(state_file) as f:
             raw = json.load(f)
         for key, val in raw.items():
-            # 新格式: "name_type_date" → 直接带日期标签
-            # 旧格式兼容: "name_type" → 加今日标签
-            if isinstance(val, dict):
-                # 新格式: {"ts": ..., "date": ...}
-                if val.get("date") == today and now - val.get("ts", 0) < 30 * 60:
-                    state[key] = val
-            else:
-                # 旧格式: 纯时间戳，加日期标签
-                if now - val < 30 * 60:
-                    state[f"{key}|{today}"] = {"ts": val, "date": today}
+            if isinstance(val, dict) and val.get("date") == today:
+                state[key] = val
 
     new_alerts = []
     for a in alerts:
-        key = f"{a['name']}_{a['type']}|{today}"
-        # 也查兼容旧key
-        old_key = f"{a['name']}_{a['type']}"
-        last_time = 0
-        if key in state:
-            last_time = state[key].get("ts", state[key]) if isinstance(state[key], dict) else state[key]
-        elif old_key in state:
-            # 兼容读
-            if isinstance(state.get(old_key), dict):
-                if state[old_key].get("date") == today:
-                    last_time = state[old_key].get("ts", 0)
-            else:
-                last_time = state.get(old_key, 0)
-        if now - last_time > 30 * 60:
+        key = f"{namespace}{a['name']}_{a['type']}_{slot}|{today}"
+        last_ts = state.get(key, {}).get("ts", 0) if isinstance(state.get(key), dict) else 0
+        if now - last_ts > 30 * 60:
             state[key] = {"ts": now, "date": today}
             new_alerts.append(a)
 
@@ -485,14 +495,47 @@ def dedup_alerts(alerts):
 
     return new_alerts
 
+
+def log_alerts_jsonl(alerts, source_info):
+    """预警命中率闭环：每条预警写 JSONL，供收盘复盘比对。
+    记录: ts, name, type, price, level, source, source_chain, deviation
+    """
+    if not alerts:
+        return
+    today = datetime.now(TZ).strftime("%Y%m%d")
+    log_file = f"{PROJECT_DIR}/logs/price_alerts_{today}.jsonl"
+    os.makedirs(os.path.dirname(log_file), exist_ok=True)
+    now_iso = datetime.now(TZ).strftime("%Y-%m-%d %H:%M:%S")
+    with open(log_file, 'a') as f:
+        for a in alerts:
+            name = a['name']
+            info = source_info.get(name, {})
+            rec = {
+                "ts": now_iso,
+                "name": name,
+                "type": a.get('type'),
+                "price": a.get('price'),
+                "level": a.get('level'),
+                "source": info.get('source'),
+                "source_chain": info.get('source_chain'),
+                "deviation": info.get('deviation_pct'),
+                "degraded": a.get('degraded', False),
+            }
+            f.write(json.dumps(rec, ensure_ascii=False) + "\n")
+
 # 钉钉推送统一入口（复用 send_to_dingtalk 模块的密钥管理）
 import sys
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from send_to_dingtalk import send_markdown
 
-def push_alerts(alerts):
-    """通过 send_to_dingtalk 统一模块推送预警到群"""
-    if not alerts:
+def push_alerts(alerts, degraded=None, merged=False):
+    """通过 send_to_dingtalk 统一模块推送预警到群。
+    degraded: 源偏差过大的降级状态提示（不单独推送，仅合并进摘要）。
+    merged: 时段摘要模式（午后/尾盘无穿越时合并为一条）。
+    """
+    alerts = alerts or []
+    degraded = degraded or []
+    if not alerts and not degraded:
         return
 
     now = datetime.now(TZ)
@@ -513,11 +556,16 @@ def push_alerts(alerts):
     lines = [header]
     for a in alerts:
         lines.append(f"- {a['msg']}")
+    # 降级提示合并进摘要（状态提示，非穿越预警）
+    if degraded and not alerts:
+        lines.append("（源交叉偏差过大，穿越待确认）")
+        for d in degraded:
+            lines.append(f"- {d['msg']}")
     text = '\n'.join(lines)
 
     try:
         send_markdown(text, title=title)
-        print(f"[price_watch] 预警已推送: {len(alerts)} 条")
+        print(f"[price_watch] 预警已推送: {len(alerts)} 条" + (f" + {len(degraded)} 状态提示" if degraded else ""))
     except Exception as e:
         print(f"[price_watch] 推送异常: {e}")
 
@@ -538,11 +586,12 @@ def main():
     # 主数据源：多源交叉验证（price_fetcher）
     pf = PriceFetcher()
     price_points = pf.fetch_all()
+    pp_map = {}
     if not price_points:
         # 备用：智兔
         prices = fetch_zhitu_prices()
     else:
-        # 转换 PricePoint → 旧prices格式（兼容check_breaches）
+        # 转换 PricePoint → 旧prices格式（兼容check_breaches），同时保留 pp_map 供一致性门
         prices = {}
         for name, pp in price_points.items():
             if pp.quality == "stale" or pp.price == 0:
@@ -556,16 +605,38 @@ def main():
                 'open': pp.open,
                 'volume': 0,
             }
+            pp_map[name] = pp
         if not prices:
             prices = fetch_zhitu_prices()
     if not prices:
         return
 
-    alerts = check_breaches(prices, thresholds)
+    # 穿越预警 + 源一致性门（偏差>1.5% 降级为状态提示）
+    alerts, degraded = check_breaches(prices, thresholds, pp_map=pp_map, consistency_gate=1.5)
     anomaly_alerts = check_intraday_anomalies(prices)
-    all_alerts = alerts + anomaly_alerts
-    new_alerts = dedup_alerts(all_alerts)
-    push_alerts(new_alerts)
+
+    # 噪音控制：异动信号（935/开盘/尾盘）早盘+盘中即时推；午后/尾盘转状态提示合并推送
+    hour = now.hour
+    anomaly_slot_allowed = hour < 14  # 午后(>=14)起异动不再即时推
+    if anomaly_slot_allowed:
+        push_target = alerts + anomaly_alerts
+        degraded_target = degraded
+    else:
+        push_target = alerts
+        degraded_target = degraded + [dict(a, degraded=True) for a in anomaly_alerts]
+        if anomaly_alerts:
+            print(f"[price_watch] 午后/尾盘异动 {len(anomaly_alerts)} 条转为状态提示（合并推送）")
+
+    new_alerts = dedup_alerts(push_target)
+    new_degraded = dedup_alerts(degraded_target, namespace="dg_")
+    push_alerts(new_alerts, degraded=new_degraded)
+
+    # 预警命中率闭环：记录 JSONL（穿越+降级+异动都记，供收盘复盘验证）
+    source_info = {name: {
+        'source': pp.source, 'source_chain': pp.source_chain,
+        'deviation_pct': pp.deviation_pct,
+    } for name, pp in pp_map.items()}
+    log_alerts_jsonl(alerts + degraded + anomaly_alerts, source_info)
 
 if __name__ == '__main__':
     main()

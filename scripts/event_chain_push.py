@@ -81,25 +81,35 @@ def format_push(result: dict) -> str:
 
 
 def auto_extract_event() -> str:
-    """从最新海外简报中提取关键事件"""
+    """从最新海外简报中提取关键事件
+    数据源: morning_brief_YYYY-MM-DD.md（盘前 07:55 生成，当前活跃）；
+    兼容旧 overseas_signal_*.md（6月前旧格式）。"""
     overseas_dir = os.path.join(PROJECT_DIR, "..", "overseas-morning-brief")
     if not os.path.exists(overseas_dir):
         overseas_dir = "/root/.openclaw/workspace/projects/overseas-morning-brief"
 
-    # 找最新的 overseas_signal 文件
-    signal_dir = os.path.join(overseas_dir, "reports") if os.path.exists(os.path.join(overseas_dir, "reports")) else overseas_dir
-    pattern = os.path.join(signal_dir, "overseas_signal_*.md")
+    # 主数据源：最新 morning_brief（活跃格式）
+    brief_dir = os.path.join(overseas_dir, "reports")
+    brief_pattern = os.path.join(brief_dir, "morning_brief_*.md")
     import glob
-    files = sorted(glob.glob(pattern), reverse=True)
-    if not files:
-        # fallback: 看一下 trading-agents 的目录
-        pattern2 = os.path.join(PROJECT_DIR, "reports", "overseas_signal_*.md")
-        files = sorted(glob.glob(pattern2), reverse=True)
-    if not files:
+    files = sorted(glob.glob(brief_pattern), reverse=True)
+    content = None
+    if files:
+        with open(files[0]) as f:
+            content = f.read()
+    else:
+        # fallback: 旧 overseas_signal 格式
+        signal_dir = brief_dir if os.path.exists(brief_dir) else overseas_dir
+        pattern = os.path.join(signal_dir, "overseas_signal_*.md")
+        files = sorted(glob.glob(pattern), reverse=True)
+        if not files:
+            pattern2 = os.path.join(PROJECT_DIR, "reports", "overseas_signal_*.md")
+            files = sorted(glob.glob(pattern2), reverse=True)
+        if files:
+            with open(files[0]) as f:
+                content = f.read()
+    if not content:
         return None
-
-    with open(files[0]) as f:
-        content = f.read()
 
     # 从内容中提取第一条关键事件（用 LLM 提炼）
     import openai
@@ -142,8 +152,8 @@ def auto_extract_event() -> str:
 
 def push_to_group(text: str):
     """推送分析结果到钉钉群聊"""
-    from send_to_dingtalk import send_markdown_msg
-    send_markdown_msg(text)
+    from send_to_dingtalk import send_markdown
+    send_markdown(text)
 
 
 def main():
