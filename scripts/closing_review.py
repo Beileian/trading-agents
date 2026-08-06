@@ -1673,15 +1673,38 @@ def main():
 
     # 用收盘快照更新虚拟盘持仓现价（paper_trading close 在 review 之后执行，
     # 但复盘报告需要展示准确的当日市值）
+    # v3.3.0 修复: 按 code 复用 paper_trading._fetch_close_price（ETF 走腾讯实时行情），
+    # 替代按 name 精确匹配 close_snapshot——原逻辑漏掉 ETF 持仓
+    # （name="科创50(科创50ETF华夏)" 匹配不上快照 key "科创50"，且快照存指数点位非 ETF 价），
+    # 导致报告净值与 paper_trading close 后不一致（实测 1.0570 vs 1.0577）。
     paper_state_file = os.path.join(PROJECT_DIR, "reports", "paper_state.json")
     if os.path.exists(paper_state_file):
         with open(paper_state_file) as f:
             ps = json.load(f)
         updated = False
+        try:
+            from paper_trading import _fetch_close_price as _pt_fetch_close
+        except Exception:
+            _pt_fetch_close = None
         for p in ps.get("positions", []):
-            name = p.get("name", "")
-            if name in close_snapshot:
-                new_price = close_snapshot[name]
+            code = p.get("code", "")
+            new_price = None
+            if _pt_fetch_close is not None and code:
+                try:
+                    new_price = _pt_fetch_close(code, TODAY_DATE)
+                except Exception:
+                    new_price = None
+            if new_price is None:
+                # fallback: 快照按 name 精确或包含匹配
+                name = p.get("name", "")
+                if name in close_snapshot:
+                    new_price = close_snapshot[name]
+                else:
+                    for sname, sprice in close_snapshot.items():
+                        if sname in name or name in sname:
+                            new_price = sprice
+                            break
+            if new_price and new_price > 0:
                 p["current_price"] = new_price
                 p["market_value"] = round(p["shares"] * new_price, 2)
                 p["unrealized_pnl"] = round(p["market_value"] - p["shares"] * p["avg_cost"], 2)
@@ -1692,7 +1715,7 @@ def main():
             ps["net_value"] = round(ps["total_assets"] / ps.get("initial_assets", ps["total_assets"]), 4) if ps.get("initial_assets") else round(ps["total_assets"] / 100000, 4)
             with open(paper_state_file, "w") as f:
                 json.dump(ps, f, ensure_ascii=False, indent=2)
-            updated_count = len([p for p in ps["positions"] if p["name"] in close_snapshot])
+            updated_count = len([p for p in ps["positions"] if p.get("current_price")])
             print(f"  虚拟盘快照更新: {updated_count} 只标的")
 
     thresholds = load_thresholds()

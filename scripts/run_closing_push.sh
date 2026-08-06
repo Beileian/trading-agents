@@ -46,19 +46,41 @@ if [ -f "$REVIEW_FILE" ] && [ -s "$REVIEW_FILE" ]; then
     # 步骤3.5: Rubrics质量评估
     CLOSING_RUBRIC="$PROJECT_DIR/rubrics/closing_review.json"
     CLOSING_RUBRIC_SCRIPT="$PROJECT_DIR/rubrics/run_rubrics.py"
+    RUBRIC_TAG=""
+    RUBRIC_SCORE=""
     if [ -f "$CLOSING_RUBRIC" ] && [ -f "$CLOSING_RUBRIC_SCRIPT" ]; then
         echo "[3.5/3] Rubrics质量评估..."
         cp "$PROJECT_DIR/rubrics/trade_recommendation.json" /tmp/trade_backup.json 2>/dev/null || true
         cp "$CLOSING_RUBRIC" "$PROJECT_DIR/rubrics/trade_recommendation.json"
-        /usr/bin/python3 "$CLOSING_RUBRIC_SCRIPT" "$REVIEW_FILE" 2>&1 || {
-            RUBRIC_EXIT=$?
-            if [ $RUBRIC_EXIT -eq 2 ]; then
-                echo "[RUBRIC] 复盘质量 REJECT — 标记但继续推送"
-            elif [ $RUBRIC_EXIT -eq 1 ]; then
-                echo "[RUBRIC] 复盘质量 LOW_CONFIDENCE — 标记但继续推送"
-            fi
-        }
+        # v3.3.0 修复: 捕获 Rubrics JSON 输出（verdict/score），注入推送标题
+        # （原实现只 echo 到日志，复盘标题永远无质量标记，与盘前推送不对称）
+        RUBRIC_OUTPUT=$(/usr/bin/python3 "$CLOSING_RUBRIC_SCRIPT" "$REVIEW_FILE" 2>/dev/null)
+        RUBRIC_EXIT=$?
+        RUBRIC_VERDICT=$(echo "$RUBRIC_OUTPUT" | python3 -c "import sys,json; d=json.load(sys.stdin); print(d.get('verdict','pass'))" 2>/dev/null || echo "pass")
+        RUBRIC_SCORE=$(echo "$RUBRIC_OUTPUT" | python3 -c "import sys,json; d=json.load(sys.stdin); print(d.get('score') or '')" 2>/dev/null || echo "")
+        if [ "$RUBRIC_VERDICT" = "reject" ]; then
+            RUBRIC_TAG="⚠️ 低质量 "
+            echo "[RUBRIC] 复盘质量 REJECT — 标题已标记，继续推送"
+        elif [ "$RUBRIC_VERDICT" = "low_confidence" ]; then
+            RUBRIC_TAG="⚠️ 低置信度 "
+            echo "[RUBRIC] 复盘质量 LOW_CONFIDENCE — 标题已标记，继续推送"
+        else
+            echo "[RUBRIC] 复盘质量 PASS"
+        fi
         cp /tmp/trade_backup.json "$PROJECT_DIR/rubrics/trade_recommendation.json" 2>/dev/null || true
+    fi
+    
+    # v3.3.0: 质量标记注入推送内容头部（标题行前插入，与盘前推送 RUBRIC_TAG 对称）
+    if [ -n "$RUBRIC_TAG" ]; then
+        TMP_REVIEW="${REVIEW_FILE}.tagged"
+        if [ -n "$RUBRIC_SCORE" ]; then
+            echo "${RUBRIC_TAG}· Rubrics ${RUBRIC_SCORE}" > "$TMP_REVIEW"
+        else
+            echo "${RUBRIC_TAG}" > "$TMP_REVIEW"
+        fi
+        echo "" >> "$TMP_REVIEW"
+        cat "$REVIEW_FILE" >> "$TMP_REVIEW"
+        REVIEW_FILE="$TMP_REVIEW"
     fi
     
     echo "[4/4] 复盘报告推送中..."

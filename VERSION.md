@@ -1,8 +1,18 @@
 #!/usr/bin/env python3
 """
-金桥量化交易推荐系统 v3.4.1
+金桥量化交易推荐系统 v3.4.2
 
 版本历史:
+  v3.4.2 (2026-08-06): 盘前/复盘全面评审 P1 三项修复（P0 v3.4.1 同批次评审延续）
+    - P1-1 IMA 空文件链路: ima_pipeline node 绝对路径解析（环境变量→shutil.which→常见nvm位置），
+      修复 cron 精简 PATH 下裸 "node" FileNotFoundError → 08-03~06 连续 4 天空文件根因
+    - P1-2 复盘净值渲染时序: 虚拟盘快照更新改为按 code 复用 paper_trading._fetch_close_price
+      （ETF 走腾讯实时行情），替代按 name 精确匹配 close_snapshot——原逻辑漏掉 ETF 持仓
+      （"科创50(科创50ETF华夏)" 匹配不上快照 key "科创50"），报告净值与 paper_trading close 后不一致（1.0570 vs 1.0577）
+    - P1-3 复盘标题质量标记: run_closing_push.sh 捕获 Rubrics JSON（verdict/score），
+      REJECT/LOW_CONFIDENCE 时在推送标题前注入 "⚠️ 低质量/低置信度 · Rubrics X" 标记，
+      与盘前推送 RUBRIC_TAG 对称（原实现只 echo 日志，复盘标题永无标记）
+
   v3.4.1 (2026-08-06): 盘前/复盘系统全面评审 P0 修复（评审来源：托董全面评审+蓝红蓝，红队16条攻击16/16成立）
     - P0-1 veto 泛化: run_rubrics.py 聚合器改为动态读取全部 fail_action=reject_and_retry 项，
       替代硬编码 schema_validity/action_consistency（原缺陷: closing_review.json 的

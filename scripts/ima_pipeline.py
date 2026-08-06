@@ -21,6 +21,21 @@ PROJECT_DIR = "/root/.openclaw/workspace/projects/trading-agents"
 IMA_API_CJS = "/root/.openclaw/workspace/skills/ima-skills/ima_api.cjs"
 KB_ID = "p2U2Du3TS2OyfEHx0JpUGTKQsZnE-eLmiUVedwnywEI="
 
+# v1.2 修复: cron 环境 PATH 不含 nvm，裸 "node" 会 FileNotFoundError（08-03~06 连续 4 天空文件根因）
+# 解析 node 绝对路径：环境变量 > shutil.which > 常见 nvm 位置
+import shutil as _shutil
+NODE_BIN = os.environ.get("NODE_BIN", "").strip()
+if not NODE_BIN:
+    NODE_BIN = _shutil.which("node") or ""
+if not NODE_BIN:
+    _candidates = [
+        "/root/.nvm/versions/node/v22.23.1/bin/node",
+        "/usr/local/bin/node",
+        "/usr/bin/node",
+    ]
+    NODE_BIN = next((p for p in _candidates if os.path.exists(p)), "node")
+print(f"[ima_pipeline] NODE_BIN={NODE_BIN}")
+
 # 知名文件夹（用于来源映射）
 FOLDER_MAP = {
     'folder_7464136493508841': 'EarlETF',
@@ -76,7 +91,7 @@ def _call_ima_api(api_path, body):
     """调用 IMA API，失败时返回 None"""
     try:
         result = subprocess.run(
-            ["node", IMA_API_CJS, api_path, json.dumps(body)],
+            [NODE_BIN, IMA_API_CJS, api_path, json.dumps(body)],
             capture_output=True, text=True, timeout=30,
             cwd=os.path.dirname(IMA_API_CJS),
         )
