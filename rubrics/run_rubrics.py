@@ -192,11 +192,14 @@ def aggregate(rubric: dict, results: list[dict]) -> dict:
             "detail": res,
         }
 
-    # Veto: schema未通过 → reject
-    if "schema_validity" in item_results and not item_results["schema_validity"]["pass"]:
-        return {"verdict": "reject", "reason": "veto: schema校验失败", "item_results": item_results}
-
-    # action_consistency < 7 → reject
+    # Veto 泛化 (v1.1.0 修复): 动态遍历所有 fail_action=reject_and_retry 项，替代硬编码 schema_validity/action_consistency
+    # 原缺陷: closing_review.json 的 data_accuracy(veto/reject_and_retry) 未被检查，仅被当普通权重 0.25 加权
+    for ir in item_results.values():
+        if ir["fail_action"] == "reject_and_retry" and not ir["pass"]:
+            detail = ir.get("detail", {})
+            rule = detail.get("rule") or detail.get("error") or "拒绝项未通过"
+            return {"verdict": "reject", "reason": f"veto: {rule}", "item_results": item_results}
+    # action_consistency 分数特判（LLM 项 pass 依赖 score>=7）
     ac = item_results.get("action_consistency", {})
     if ac.get("score", 10) < 7:
         return {"verdict": "reject", "reason": "veto: 方向一致性得分 < 7", "item_results": item_results}

@@ -24,13 +24,19 @@ if len(matches) < 3:
 
 # 2. 检查穿越数量是否自洽
 # "穿越 N 条" 后面应该跟 N 条具体条目
+# v1.1.0 修复: 报告写"无"（无穿越日）时，视为 0 条声明，不再误报"缺失穿越数量声明"
+breach_section = text.split("**⑤ 价格穿越**")[1].split("**⑥")[0] if "**⑤" in text and "**⑥" in text else ""
 breach_header = re.search(r'穿越\s*(\d+)\s*条', text)
 if not breach_header:
-    errors.append("缺失穿越数量声明")
+    # 无穿越声明: 若穿越段为空/含"无"（说明行+无 结构），视为 0 条
+    if breach_section.strip() in ("", "-", "None") or "无" in breach_section:
+        expected = 0
+    else:
+        errors.append("缺失穿越数量声明")
 else:
     expected = int(breach_header.group(1))
     # 数穿越的具体条目（🟢或🔴开头的行）
-    breach_items = len(re.findall(r'[🟢🔴]\s+\w+', text.split("**⑤ 价格穿越**")[1].split("**⑥")[0] if "**⑤" in text and "**⑥" in text else ""))
+    breach_items = len(re.findall(r'[🟢🔴]\s+\w+', breach_section))
     if breach_items != expected:
         errors.append(f"穿越数量不一致: 声明{expected}条 vs 实际列出{breach_items}条")
 

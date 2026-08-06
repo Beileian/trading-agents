@@ -420,16 +420,22 @@ def backtest_proxy(state, bi_list, price):
     """Step 7: 回测代理 — 检查历史类似结构的胜率"""
     if len(bi_list) < 10:
         return None
-    # 统计中枢突破后的成功率 (简化版: 突破中枢→下一笔方向)
+    # 统计中枢突破后的成功率 (简化版: 突破中枢→后续是否延续)
     breakouts = 0
     successes = 0
     for i in range(3, len(bi_list) - 1):
-        # 检测模式: 前一笔突破前一笔的高点 (简化突破检测)
+        # 检测模式: up 笔终点突破前笔起点 (简化突破检测)
         if bi_list[i]['type'] == 'up' and bi_list[i]['end']['price'] > bi_list[i-1]['start']['price']:
             breakouts += 1
-            # 突破后下一笔继续向上 → 成功
-            if i + 1 < len(bi_list) and bi_list[i+1]['type'] == 'up':
-                successes += 1
+            # 延续判定 (v3.3.0 修复): 原逻辑 bi[i+1]['type']=='up' 在严格交替笔序列中
+            # 结构性永假（up 笔后必是 down 笔），导致全标的延续率恒 0%——伪统计。
+            # 改为: 突破后未来 6 笔内出现更高 up 笔终点 → 延续成功。
+            breakout_high = bi_list[i]['end']['price']
+            lookahead = min(i + 1 + 6, len(bi_list))
+            for j in range(i + 1, lookahead):
+                if bi_list[j]['type'] == 'up' and bi_list[j]['end']['price'] > breakout_high:
+                    successes += 1
+                    break
 
     if breakouts >= 3:
         rate = successes / breakouts * 100

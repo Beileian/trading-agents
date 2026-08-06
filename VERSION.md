@@ -1,8 +1,25 @@
 #!/usr/bin/env python3
 """
-金桥量化交易推荐系统 v3.4.0
+金桥量化交易推荐系统 v3.4.1
 
 版本历史:
+  v3.4.1 (2026-08-06): 盘前/复盘系统全面评审 P0 修复（评审来源：托董全面评审+蓝红蓝，红队16条攻击16/16成立）
+    - P0-1 veto 泛化: run_rubrics.py 聚合器改为动态读取全部 fail_action=reject_and_retry 项，
+      替代硬编码 schema_validity/action_consistency（原缺陷: closing_review.json 的
+      data_accuracy=veto 被当普通权重 0.25 加权，6.1分 pass 无标记直接推送）
+    - P0-2 方向解析重写: load_morning_synthesis 改为前缀显式声明优先，
+      修复「多维度偏多（…TimesFM多数偏空…）」被括号内描述词反噬误判偏空（08-03 假✅根因）
+    - P0-3 外盘注入竞态修复: run_premarket_analysis.sh 外盘文件就绪轮询等待 120s
+      （morning_brief 06:36 落盘 vs 盘前 06:35 启动竞态，08-06 外盘信号漏注入）
+    - P0-4 复盘外盘正则修复: 兼容「方向：偏多」「置信度：中」带冒号格式
+      （原正则不匹配 → 08-05/08-06 复盘连续误报“外盘信号未生成”）
+    - P0-5 Rubric C 评分管道: 解析真实 score（原 grep pass 写死 10.0，掩盖内部 7.3）
+    - P0-6 状态文件写入修复: bash 布尔注入 true/false→Python NameError，错误被 2>/dev/null 吞掉；
+      改为参数传递 + os.path.exists + 错误可见
+    - P0-7 缠论回测伪统计修复: backtest_proxy success 条件在严格交替笔序列中结构性永假
+      （up 后必是 down → 延续率恒 0%），改为突破后 6 笔内创新高判定
+    - 配套: check_closing_accuracy.py 无穿越日误报修复（报告写“无”时视为 0 条）
+
   v3.4.0 (2026-08-05): 标的检测链路评审落地 P0-P2（评审来源：托董标的检测提醒全面评审）
     - P0-1 冻结识别强化: price_fetcher 冻结状态跨运行持久化(price_freeze_state.json)，
       连续3轮价格不变→warning、5轮→stale；昨收匹配增强怀疑；

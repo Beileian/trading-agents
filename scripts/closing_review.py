@@ -255,6 +255,9 @@ def load_morning_synthesis():
     用于收盘复盘时验证盘前对市场整体方向的预判是否准确。
     
     返回 dict: { 'direction': '偏多'|'偏空'|'中性'|None, 'text': '...' }
+    
+    v3.3.0 修复: 方向判定改为「多维度偏X」前缀优先 + 显式方向词扫描，
+    避免被括号内的描述词反噬（如「多维度偏多（…TimesFM多数偏空…）」曾误判为偏空）。
     """
     signals_file = f"{PROJECT_DIR}/reports/trade_signals_{TODAY_TAG}.md"
     if not os.path.exists(signals_file):
@@ -268,14 +271,30 @@ def load_morning_synthesis():
         line = line.strip()
         if '【合成判断】' in line:
             synthesis = line.split('【合成判断】')[-1].strip()
-            # 判断方向
-            if '偏多' in synthesis and '偏空' not in synthesis:
-                direction = '偏多'
-            elif '偏空' in synthesis:
-                direction = '偏空'
-            else:
-                direction = '中性'
+            direction = _parse_synthesis_direction(synthesis)
             return {'direction': direction, 'text': synthesis}
+    return None
+
+
+def _parse_synthesis_direction(synthesis: str) -> str | None:
+    """从合成判断文本提取方向：前缀显式声明 > 全局首个方向词。
+    反噬案例: 「多维度偏多（温度偏热、TimesFM多数偏空…）」— 括号内描述词不得覆盖前缀声明。
+    """
+    if not synthesis:
+        return None
+    # ① 前缀显式声明: 多维度偏多/偏空/中性（开头位置）
+    m = re.match(r'^多维度\s*(偏多|偏空|中性|震荡)', synthesis)
+    if m:
+        return m.group(1) if m.group(1) != '震荡' else '中性'
+    # ② 全局首个方向词（去括号内干扰：先截取第一个「（」之前）
+    head = synthesis.split('（')[0].split('(')[0]
+    for kw in ['偏多', '偏空', '中性', '震荡', '分歧']:
+        if kw in head:
+            return '中性' if kw in ('震荡', '分歧') else kw
+    # ③ 兜底: 全文首个方向词（已无前缀时）
+    for kw in ['偏多', '偏空', '中性', '震荡', '分歧']:
+        if kw in synthesis:
+            return '中性' if kw in ('震荡', '分歧') else kw
     return None
 
 
@@ -414,13 +433,13 @@ def load_overseas_direction():
     if m:
         return m.group(1).strip()
     # 新格式: 综合研判段落中提取"方向偏多"或"方向偏空"
-    # 找"综合研判"后的方向关键词
+    # v3.3.0 修复: 兼容"方向：偏多"（带全角冒号）与"方向偏多"（无冒号）两种写法
     syn_section = text.split("📊 综合研判")[-1] if "综合研判" in text else text
-    m2 = re.search(r"方向(偏多|偏空|中性|分歧)", syn_section)
+    m2 = re.search(r"方向[:：]?\s*(偏多|偏空|中性|分歧)", syn_section)
     if m2:
-        return m2.group(0)  # e.g. "方向偏多"
+        return m2.group(0)  # e.g. "方向偏多" / "方向：偏多"
     # fallback: 全文中找
-    m3 = re.search(r"方向(偏多|偏空|中性|分歧)", text)
+    m3 = re.search(r"方向[:：]?\s*(偏多|偏空|中性|分歧)", text)
     return m3.group(0) if m3 else None
 
 
@@ -440,8 +459,9 @@ def load_overseas_confidence():
     if m:
         return m.group(1).strip()
     # 新格式: 综合研判段落中提取"置信度高/中/低"
+    # v3.3.0 修复: 兼容"置信度：中"（带全角冒号）与"置信度中"（无冒号）两种写法
     syn_section = text.split("📊 综合研判")[-1] if "综合研判" in text else text
-    m2 = re.search(r"置信度(高|中|低)", syn_section)
+    m2 = re.search(r"置信度[:：]?\s*(高|中|低)", syn_section)
     if m2:
         return m2.group(1)
     return None

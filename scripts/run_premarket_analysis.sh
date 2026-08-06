@@ -48,8 +48,18 @@ OVERSEAS_BRIEF="/root/.openclaw/workspace/projects/overseas-morning-brief/report
 OVERSEAS_DIRECTION=""
 OVERSEAS_CONFIDENCE=""
 
+# v3.2.0 竞态修复: 外盘 cron 06:30 启动但 morning_brief 可能 06:36 才落盘，
+# 而盘前分析 06:35 启动、generate_trade_signals 可能在 06:36 前运行 → 外盘信号漏注入。
+# 对策: 文件不存在时轮询等待最多 120s（每 10s 一次），仍无则跳过并告警。
+OVERSEAS_WAIT_MAX=120
+OVERSEAS_WAITED=0
+while [ ! -f "$OVERSEAS_BRIEF" ] && [ "$OVERSEAS_WAITED" -lt "$OVERSEAS_WAIT_MAX" ]; do
+    sleep 10
+    OVERSEAS_WAITED=$((OVERSEAS_WAITED + 10))
+done
+
 if [ -f "$OVERSEAS_BRIEF" ]; then
-    echo "[0/Z] 读取外盘晨间研判..."
+    echo "[0/Z] 读取外盘晨间研判... (就绪等待 ${OVERSEAS_WAITED}s)"
     # 提取方向判断和置信度
     DIR_LINE=$(grep -m1 '方向[：:]' "$OVERSEAS_BRIEF" 2>/dev/null || echo "")
     if [ -n "$DIR_LINE" ]; then
@@ -76,7 +86,7 @@ if [ -f "$OVERSEAS_BRIEF" ]; then
         echo "  ⚠️ 未能从外盘研判提取方向信号，将不使用外盘上下文"
     fi
 else
-    echo "[0/Z] 外盘晨间研判文件不存在 ($OVERSEAS_BRIEF)，跳过外盘信号注入"
+    echo "[0/Z] 外盘晨间研判文件不存在 (等待 ${OVERSEAS_WAITED}s 后仍无: $OVERSEAS_BRIEF)，跳过外盘信号注入"
 fi
 
 # 步骤1: 技术分析报告（并发版，10只标的并行分析，支持断点续跑）
@@ -175,12 +185,18 @@ if [ -f "$RUBRIC_SCRIPT" ]; then
     if [ -f "$TRADE_FILE" ]; then
         echo "[3.5/5] Rubric C: 信号规则门控 (script)..."
         SIG_OUTPUT=$(/usr/bin/python3 "$SCRIPT_DIR/generate_trade_signals.py" "$DATE_TAG" 2>&1 || true)
+        # v3.3.0 修复: 解析真实 score，不再 grep pass 后写死 10.0
+        # （原缺陷: 内部门控 score=7.3(process_audit 0分) 被 grep pass 掩盖成 10.0）
         if echo "$SIG_OUTPUT" | grep -q "Rubrics门控: pass"; then
-            _rubric_merge "pass" "10.0" "C"
-            echo "  ✅ Rubric C: pass (score=10.0)"
+            SIG_SCORE=$(echo "$SIG_OUTPUT" | grep -oP 'Rubrics门控: pass \(score=\K[0-9.]+' | head -1 || echo "10.0")
+            SIG_SCORE=${SIG_SCORE:-10.0}
+            _rubric_merge "pass" "$SIG_SCORE" "C"
+            echo "  ✅ Rubric C: pass (score=$SIG_SCORE)"
         elif echo "$SIG_OUTPUT" | grep -q "Rubrics门控: low_confidence"; then
-            _rubric_merge "low_confidence" "6.0" "C"
-            echo "  ⚠️ Rubric C: low_confidence"
+            SIG_SCORE=$(echo "$SIG_OUTPUT" | grep -oP 'Rubrics门控: low_confidence \(score=\K[0-9.]+' | head -1 || echo "6.0")
+            SIG_SCORE=${SIG_SCORE:-6.0}
+            _rubric_merge "low_confidence" "$SIG_SCORE" "C"
+            echo "  ⚠️ Rubric C: low_confidence (score=$SIG_SCORE)"
         else
             echo "  ⚠️ Rubric C: 未检测到门控输出，跳过"
         fi
@@ -281,20 +297,24 @@ else
 fi
 
 # 写入状态文件供推送脚本读取
+# v3.3.0 修复: 原实现用 bash $(... && echo true || echo false) 注入 python 代码，
+# 裸 true/false 在 python 中是 NameError → json.dump 必然失败，且 2>/dev/null 静默吞错。
+# 改为: 参数传递 + python 内 os.path.exists 判断 + 错误可见。
 STATE_FILE="$REPORT_DIR/analysis_state_${DATE_TAG}.json"
-python3 -c "
-import json
+python3 - "$STATE_FILE" "$DATE_STR" "$RUBRIC_VERDICT" "$RUBRIC_MIN_SCORE" "$RUBRIC_TAG" "${OVERSEAS_DIRECTION:-}" "${OVERSEAS_CONFIDENCE:-}" "$TRADE_FILE" "$ANALYSIS_FILE" <<'PYEOF' || echo "[WARN] 状态文件写入失败"
+import json, os, sys
+state_file, date_str, verdict, min_score, tag, ov_dir, ov_conf, trade_file, analysis_file = sys.argv[1:10]
 json.dump({
-    'date': '$DATE_STR',
-    'trade_file_exists': $( [ -f "$TRADE_FILE" ] && echo "true" || echo "false" ),
-    'analysis_file_exists': $( [ -f "$ANALYSIS_FILE" ] && echo "true" || echo "false" ),
-    'rubric_verdict': '$RUBRIC_VERDICT',
-    'rubric_min_score': $RUBRIC_MIN_SCORE,
-    'rubric_tag': '$RUBRIC_TAG',
-    'overseas_direction': '${OVERSEAS_DIRECTION:-}',
-    'overseas_confidence': '${OVERSEAS_CONFIDENCE:-}',
-}, open('$STATE_FILE', 'w'))
-" 2>/dev/null || echo "[WARN] 状态文件写入失败"
+    'date': date_str,
+    'trade_file_exists': os.path.exists(trade_file),
+    'analysis_file_exists': os.path.exists(analysis_file),
+    'rubric_verdict': verdict,
+    'rubric_min_score': float(min_score) if min_score else 10.0,
+    'rubric_tag': tag,
+    'overseas_direction': ov_dir or '',
+    'overseas_confidence': ov_conf or '',
+}, open(state_file, 'w'))
+PYEOF
 
 echo "=== 盘前分析完成 ==="
 echo "产出: $TRADE_FILE, $ANALYSIS_FILE"
