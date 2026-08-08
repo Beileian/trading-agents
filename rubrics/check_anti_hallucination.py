@@ -89,17 +89,16 @@ def check_trend_evidence(text):
 
 
 def check_contradiction(text):
-    """检测方向与数据矛盾"""
+    """检测方向与数据矛盾（按标的段落检查，避免跨标的误报）"""
     violations = []
-
-    # 简单模式：说多头排列但同时说均线空头/下跌
-    if '多头排列' in text and re.search(r'空头排列|下跌趋势|均线死叉', text):
-        violations.append("方向矛盾: 同时出现多头排列和空头/下跌信号")
-
-    if '看多' in text and re.search(r'看空|不建议', text):
-        # 可能是不同标的，检查是否同一段落
-        pass
-
+    # 按标的段落切分（### 000016.SH 格式），每个标的独立检查
+    sections = re.split(r'(?=###\s*\d{6}\.(?:SH|SZ))', text)
+    for sec in sections:
+        if len(sec.strip()) < 20:
+            continue
+        # 简单模式：同一标的内说多头排列但同时说均线空头/下跌
+        if '多头排列' in sec and re.search(r'空头排列|下跌趋势|均线死叉', sec):
+            violations.append("方向矛盾: 同一标的同时出现多头排列和空头/下跌信号")
     return violations
 
 
