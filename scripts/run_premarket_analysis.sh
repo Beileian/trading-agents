@@ -106,6 +106,33 @@ else
     /usr/bin/python3 trading_analysis_concurrent.py "$DATE_STR" 2>&1 || echo "[WARN] 技术分析部分失败，继续"
 fi
 
+# 步骤1.5: 反幻觉校验闭环（方案B，2026-08-08 接入）
+# 分析报告生成后立即校验：违规 → 重新生成（最多2轮）→ 仍违规则标注低质量继续（不阻断推送）
+ANTI_HALLUC_SCRIPT="$PROJECT_DIR/rubrics/check_anti_hallucination.py"
+AH_MAX_RETRY=2
+AH_RETRY=0
+AH_PASS=false
+if [ -f "$ANALYSIS_FILE" ]; then
+    while [ $AH_RETRY -le $AH_MAX_RETRY ]; do
+        AH_RESULT=$(/usr/bin/python3 "$ANTI_HALLUC_SCRIPT" "$ANALYSIS_FILE" --json 2>&1)
+        AH_VIOLATIONS=$(echo "$AH_RESULT" | python3 -c "import sys,json; print(json.load(sys.stdin).get('violation_count', 99))" 2>/dev/null || echo 99)
+        if [ "$AH_VIOLATIONS" -eq 0 ]; then
+            AH_PASS=true
+            break
+        fi
+        echo "  ⚠️ 反幻觉违规 $AH_VIOLATIONS 条（重试 $((AH_RETRY+1))/$AH_MAX_RETRY）..."
+        cd "$SCRIPT_DIR"
+        /usr/bin/python3 trading_analysis_concurrent.py "$DATE_STR" 2>&1 || echo "[WARN] 反幻觉重生成失败，继续"
+        AH_RETRY=$((AH_RETRY+1))
+    done
+    if [ "$AH_PASS" != true ]; then
+        echo "  ⚠️ 反幻觉校验 $AH_MAX_RETRY 轮后仍未通过，标注低质量继续（不阻断推送）"
+        printf '\n⚠️ [反幻觉未完全通过] 本报告存在模糊技术位/方向矛盾表述，建议人工审阅。\n' >> "$ANALYSIS_FILE"
+    else
+        echo "  ✅ 反幻觉校验通过 (0 违规)"
+    fi
+fi
+
 # 步骤2: IMA知识库观点（一步完成：提取+衰减+摘要，支持断点续跑）
 OPINION_FILE="$REPORT_DIR/opinions_${DATE_TAG}.md"
 echo "[2/5] IMA观点管线..."

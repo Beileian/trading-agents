@@ -1,8 +1,16 @@
 #!/usr/bin/env python3
 """
-金桥量化交易推荐系统 v3.4.2
+金桥量化交易推荐系统 v3.5.0
 
 版本历史:
+  v3.5.0 (2026-08-08): 反幻觉 prompt 重构 + 生成后校验闭环（双模型A/B试点成果落地）
+    - P0-A build_prompt 重构: 「具体风险」15字限制放开至60字+强制触发条件格式（"若跌破X则Y"）；
+      注入反幻觉铁律（支撑/阻力必须具体价格、趋势判断必须指标数值、同一标的方向不得矛盾、禁模糊词）
+    - P0-B 生成后校验闭环: run_premarket_analysis.sh 步骤1.5 接入 check_anti_hallucination veto——
+      违规自动重新生成（最多2轮），仍违规则标注低质量继续推送（不阻断，防断供）
+    - 配套: 修复3个评估器 bug（字段漂移/位置参数/跨标的误报），rubrics 恢复真实评估
+    - 验证: 双模型A/B试点 8/7 数据 → Flash/M3 均 pass score 9.3（修复前 reject）；
+      新 prompt 报告 check_anti_hallucination 违规数 2→0
   v3.4.2 (2026-08-06): 盘前/复盘全面评审 P1 三项修复（P0 v3.4.1 同批次评审延续）
     - P1-1 IMA 空文件链路: ima_pipeline node 绝对路径解析（环境变量→shutil.which→常见nvm位置），
       修复 cron 精简 PATH 下裸 "node" FileNotFoundError → 08-03~06 连续 4 天空文件根因
