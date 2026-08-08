@@ -140,10 +140,11 @@ def main():
     parser = argparse.ArgumentParser(description='交易推荐反幻觉审计')
     parser.add_argument('--file', help='从文件读取推荐文本')
     parser.add_argument('--json', action='store_true', help='JSON 格式输出')
+    parser.add_argument('positional', nargs='?', help='兼容 run_rubrics 位置参数传参（即输入文件）')
     args = parser.parse_args()
 
-    if args.file:
-        with open(args.file) as f:
+    if args.file or args.positional:
+        with open(args.file or args.positional) as f:
             text = f.read()
     else:
         text = sys.stdin.read()

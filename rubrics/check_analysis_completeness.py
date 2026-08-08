@@ -21,7 +21,7 @@ SYMBOLS = [
     "562500.SH",
 ]
 
-REQUIRED_FIELDS = ["最新价", "MA5", "MA20", "MA60", "RSI"]
+REQUIRED_FIELDS = ["最新收盘价", "MA5", "MA20", "MA60", "RSI"]
 DECISION_FIELDS = ["趋势判断", "支撑位", "阻力位", "交易建议", "建议仓位", "行业背景", "具体风险", "简要理由"]
 
 with open(sys.argv[1]) as f:
