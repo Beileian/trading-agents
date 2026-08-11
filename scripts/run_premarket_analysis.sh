@@ -106,31 +106,23 @@ else
     /usr/bin/python3 trading_analysis_concurrent.py "$DATE_STR" 2>&1 || echo "[WARN] 技术分析部分失败，继续"
 fi
 
-# 步骤1.5: 反幻觉校验闭环（方案B，2026-08-08 接入）
-# 分析报告生成后立即校验：违规 → 重新生成（最多2轮）→ 仍违规则标注低质量继续（不阻断推送）
+# 步骤1.5: 反幻觉校验闭环（方案C，2026-08-11 改造——失败不连锁）
+# 原则: 校验是「质量标注」非「质量门」——违规/失败仅追加标注，绝不阻断后续步骤(IMA→交易推荐→推送)。
+# 历史: v3.5.0 原设计为「违规→重生成(最多2轮)→标注继续」，但 8/11 事故证明重生成成本高(完整10只并发)
+#   且收益不确定(违规在特定段落，重生成不一定消除)；set -e 下重试循环还曾静默杀死脚本导致断供。
+# 方案C: 单次校验 + 违规标注，去掉重生成循环；timeout 防 check 脚本 hang。
 ANTI_HALLUC_SCRIPT="$PROJECT_DIR/rubrics/check_anti_hallucination.py"
-AH_MAX_RETRY=2
-AH_RETRY=0
 AH_PASS=false
 if [ -f "$ANALYSIS_FILE" ]; then
-    while [ $AH_RETRY -le $AH_MAX_RETRY ]; do
-        # set -e 豁免(2026-08-11 P0): check 退出码1=有违规(预期业务结果,JSON承载), 2+=真实错误(JSON解析失败→echo 99走重试,不静默)
-        AH_RESULT=$(/usr/bin/python3 "$ANTI_HALLUC_SCRIPT" "$ANALYSIS_FILE" --json 2>&1 || true)
-        AH_VIOLATIONS=$(echo "$AH_RESULT" | python3 -c "import sys,json; print(json.load(sys.stdin).get('violation_count', 99))" 2>/dev/null || echo 99)
-        if [ "$AH_VIOLATIONS" -eq 0 ]; then
-            AH_PASS=true
-            break
-        fi
-        echo "  ⚠️ 反幻觉违规 $AH_VIOLATIONS 条（重试 $((AH_RETRY+1))/$AH_MAX_RETRY）..."
-        cd "$SCRIPT_DIR"
-        /usr/bin/python3 trading_analysis_concurrent.py "$DATE_STR" 2>&1 || echo "[WARN] 反幻觉重生成失败，继续"
-        AH_RETRY=$((AH_RETRY+1))
-    done
-    if [ "$AH_PASS" != true ]; then
-        echo "  ⚠️ 反幻觉校验 $AH_MAX_RETRY 轮后仍未通过，标注低质量继续（不阻断推送）"
-        printf '\n⚠️ [反幻觉未完全通过] 本报告存在模糊技术位/方向矛盾表述，建议人工审阅。\n' >> "$ANALYSIS_FILE"
-    else
+    # set -e 豁免(2026-08-11 P0): check 退出码1=有违规(预期业务结果,JSON承载), 2+=真实错误(JSON解析失败→标注未知,不静默)
+    AH_RESULT=$(timeout 120 /usr/bin/python3 "$ANTI_HALLUC_SCRIPT" "$ANALYSIS_FILE" --json 2>&1 || true)
+    AH_VIOLATIONS=$(echo "$AH_RESULT" | python3 -c "import sys,json; print(json.load(sys.stdin).get('violation_count', 99))" 2>/dev/null || echo 99)
+    if [ "$AH_VIOLATIONS" -eq 0 ]; then
+        AH_PASS=true
         echo "  ✅ 反幻觉校验通过 (0 违规)"
+    else
+        echo "  ⚠️ 反幻觉违规 $AH_VIOLATIONS 条——标注低质量继续（不阻断推送，供人工审阅）"
+        printf '\n⚠️ [反幻觉未完全通过] 本报告存在模糊技术位/方向矛盾表述，建议人工审阅。\n' >> "$ANALYSIS_FILE"
     fi
 fi
 
