@@ -114,7 +114,8 @@ AH_RETRY=0
 AH_PASS=false
 if [ -f "$ANALYSIS_FILE" ]; then
     while [ $AH_RETRY -le $AH_MAX_RETRY ]; do
-        AH_RESULT=$(/usr/bin/python3 "$ANTI_HALLUC_SCRIPT" "$ANALYSIS_FILE" --json 2>&1)
+        # set -e 豁免(2026-08-11 P0): check 退出码1=有违规(预期业务结果,JSON承载), 2+=真实错误(JSON解析失败→echo 99走重试,不静默)
+        AH_RESULT=$(/usr/bin/python3 "$ANTI_HALLUC_SCRIPT" "$ANALYSIS_FILE" --json 2>&1 || true)
         AH_VIOLATIONS=$(echo "$AH_RESULT" | python3 -c "import sys,json; print(json.load(sys.stdin).get('violation_count', 99))" 2>/dev/null || echo 99)
         if [ "$AH_VIOLATIONS" -eq 0 ]; then
             AH_PASS=true

@@ -1,9 +1,17 @@
 #!/usr/bin/env python3
 """
-金桥量化交易推荐系统 v3.5.0
+金桥量化交易推荐系统 v3.5.1
 
 版本历史:
-  v3.5.0 (2026-08-08): 反幻觉 prompt 重构 + 生成后校验闭环（双模型A/B试点成果落地）
+  v3.5.1 (2026-08-11): P0 修复 — 反幻觉校验 set -e 静默终止缺陷（8/11 盘前断供根因）
+    - 问题陈述: 金桥盘前 8/11 断供——check_anti_hallucination 退出码1(有违规) + set -e 命令替换
+      → 分析脚本在步骤1.5 静默死亡(无任何报错输出)，trade_signals 未生成，08:00 推送 ALERT 退出，
+      watchdog 报 premarket_20260811.md 产出缺失
+    - 修复: run_premarket_analysis.sh 步骤1.5 AH_RESULT 赋值加 || true 豁免——违规与否由 JSON
+      violation_count 承载，退出码无额外信息；真实错误(JSON解析失败)→echo 99 走重试，不静默
+    - 降级路径恢复: 违规→重新生成(最多2轮)→仍违规则标注低质量继续推送（作者原设计，set -e 使不可达）
+    - 验证: bash -n 语法通过；mock check 退出1 → 重试3轮可达+「标注低质量继续」分支可达，脚本不中断
+
     - P0-A build_prompt 重构: 「具体风险」15字限制放开至60字+强制触发条件格式（"若跌破X则Y"）；
       注入反幻觉铁律（支撑/阻力必须具体价格、趋势判断必须指标数值、同一标的方向不得矛盾、禁模糊词）
     - P0-B 生成后校验闭环: run_premarket_analysis.sh 步骤1.5 接入 check_anti_hallucination veto——
