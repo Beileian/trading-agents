@@ -268,10 +268,12 @@ def write_log(rubric: dict, report_file: str, verdict: dict, results: list[dict]
         # 脚本项附 exit code
         if "exit_code" in res:
             entry["items"][item["id"]]["exit_code"] = res["exit_code"]
-        # LLM 项附输出
+        # LLM 项附输出（2026-08-18 改为完整记录：截断 200 会丢 adaptive 模式 final answer，
+        # 事故定位只能看到 <think> 开头——红队疑点3可观测性修复）
         if "llm_output" in res:
             llm_out = res["llm_output"]
-            entry["items"][item["id"]]["llm_output"] = llm_out[:200] if llm_out else None
+            entry["items"][item["id"]]["llm_output"] = llm_out if llm_out else None
+            entry["items"][item["id"]]["llm_output_clean"] = _clean_llm_output(llm_out) if llm_out else None
 
     with open(LOG_FILE, "a") as f:
         f.write(json.dumps(entry, ensure_ascii=False) + "\n")
