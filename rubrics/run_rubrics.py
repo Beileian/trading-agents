@@ -155,26 +155,41 @@ def evaluate_llm_item(item: dict, report_text: str, analysis_text: str = "", see
         return {"pass": False, "llm_output": None, "error": last_error}
 
     # 判断通过条件 — v3.0 统一使用0-10分
+    # 2026-08-18 A/B 修复：先剥离 <think> 思考块，防 MiniMax adaptive 模式下 think 内容污染数值/关键词解析
+    clean_output = _clean_llm_output(llm_output)
     cond = item["pass_condition"]
     if ">=" in cond:
         threshold = float(re.search(r'[\d.]+', cond).group())
         try:
-            score = float(re.search(r'[\d.]+', llm_output).group())
+            score = float(re.search(r'[\d.]+', clean_output).group())
             passed = score >= threshold
         except (ValueError, AttributeError):
             score = 0
             passed = False
     elif "是" in cond:
-        passed = "是" in llm_output and "否" not in llm_output[:50]
+        passed = "是" in clean_output and "否" not in clean_output[:50]
         score = 10 if passed else 0
     elif "exit code" in cond:
         passed = res.get("pass", False)  # script类，pass已在调用处设置
         score = 10 if passed else 0
     else:
-        passed = cond in llm_output
+        passed = cond in clean_output
         score = 10 if passed else 0
 
     return {"pass": passed, "score": score, "llm_output": llm_output}
+
+
+def _clean_llm_output(llm_output: str) -> str:
+    """剥离 <think> 思考块，防污染数值/关键词解析（2026-08-18 A/B 测试修复）
+    
+    A/B 实测：MiniMax-M3 adaptive 模式下 think 推理混入 content，
+    "上证50" 等数字被正则误提取为评分 → 假 PASS。
+    剥离后仅剩最终答案（如纯数字或简短结论）。
+    """
+    if not llm_output:
+        return ""
+    cleaned = re.sub(r'<think>.*?</think>', '', llm_output, flags=re.DOTALL).strip()
+    return cleaned
 
 
 def aggregate(rubric: dict, results: list[dict]) -> dict:
