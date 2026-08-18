@@ -32,20 +32,20 @@ PROJECT_DIR = os.path.dirname(RUBRICS_DIR)
 RUBRIC_FILE = os.path.join(RUBRICS_DIR, "trade_recommendation.json")
 LOG_FILE = os.path.join(RUBRICS_DIR, "rubric_log.jsonl")
 
-DEEPSEEK_URL = "https://api.deepseek.com/chat/completions"
-MODEL = "deepseek-v4-pro"
+LLM_URL = "https://api.minimax.chat/v1/chat/completions"
+MODEL = "MiniMax-M3"
 
 
-def _get_deepseek_key():
+def _get_llm_key():
     """三级查找链：环境变量 → .env 文件 → hardcoded fallback"""
-    key = os.environ.get("DEEPSEEK_API_KEY", "")
+    key = os.environ.get("MINIMAX_API_KEY", "")
     if key:
         return key
     env_file = os.path.join(PROJECT_DIR, ".env")
     if os.path.exists(env_file):
         with open(env_file) as f:
             for line in f:
-                if line.startswith("DEEPSEEK_API_KEY="):
+                if line.startswith("MINIMAX_API_KEY="):
                     key = line.split("=", 1)[1].strip().strip('"').strip("'")
                     if key:
                         return key
@@ -53,10 +53,10 @@ def _get_deepseek_key():
 
 
 def call_llm(prompt: str, max_tokens: int = 8000) -> str:
-    """调用 DeepSeek 做 LLM 评判"""
+    """调用 MiniMax-M3 做 LLM 评判（2026-08-18 从 deepseek-v4-pro 切换）"""
     import requests
-    key = _get_deepseek_key()
-    resp = requests.post(DEEPSEEK_URL,
+    key = _get_llm_key()
+    resp = requests.post(LLM_URL,
         headers={
             "Authorization": f"Bearer {key}",
             "Content-Type": "application/json"
@@ -66,7 +66,8 @@ def call_llm(prompt: str, max_tokens: int = 8000) -> str:
             "messages": [{"role": "user", "content": prompt}],
             "max_tokens": max_tokens,
             "temperature": 0.1,
-            # 保思维链：不设 thinking:disabled，靠大 max_tokens 防 content 恒空
+            # 思考模型铁律：显式 thinking disabled，防 reasoning 耗尽 max_tokens 致 content 恒空
+            "thinking": {"type": "disabled"},
         },
         timeout=60
     )
