@@ -150,10 +150,10 @@ def auto_extract_event() -> str:
         return None
 
 
-def push_to_group(text: str):
-    """推送分析结果到钉钉群聊"""
+def push_to_group(text: str) -> bool:
+    """推送分析结果到钉钉群聊，返回是否成功（v1.1 2026-09-06 接线：此前定义未调用，静默无效运行 45 天）"""
     from send_to_dingtalk import send_markdown
-    send_markdown(text)
+    return bool(send_markdown(text))
 
 
 def main():
@@ -188,6 +188,16 @@ def main():
     with open(output_file, 'w') as f:
         f.write(push_text)
     print(f"\n✓ {output_file}")
+
+    # 推送到群（--dry-run 跳过；失败时非零退出让 cron 日志可见）
+    if "--dry-run" in sys.argv:
+        print("[dry-run] 跳过推送")
+        return
+    if push_to_group(push_text):
+        print("✅ 已推送钉钉群")
+    else:
+        print("❌ 事件链推送失败", file=sys.stderr)
+        sys.exit(3)
 
 
 if __name__ == "__main__":

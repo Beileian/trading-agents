@@ -60,30 +60,19 @@ done
 
 if [ -f "$OVERSEAS_BRIEF" ]; then
     echo "[0/Z] 读取外盘晨间研判... (就绪等待 ${OVERSEAS_WAITED}s)"
-    # 提取方向判断和置信度
-    DIR_LINE=$(grep -m1 '方向[：:]' "$OVERSEAS_BRIEF" 2>/dev/null || echo "")
-    if [ -n "$DIR_LINE" ]; then
-        # 提取方向关键词
-        if echo "$DIR_LINE" | grep -q '偏多'; then
-            OVERSEAS_DIRECTION="偏多"
-        elif echo "$DIR_LINE" | grep -q '偏空'; then
-            OVERSEAS_DIRECTION="偏空"
-        else
-            OVERSEAS_DIRECTION="中性"
-        fi
-        # 提取置信度
-        if echo "$DIR_LINE" | grep -q '置信度[：: ]*高'; then
-            OVERSEAS_CONFIDENCE="高"
-        elif echo "$DIR_LINE" | grep -q '置信度[：: ]*中'; then
-            OVERSEAS_CONFIDENCE="中"
-        elif echo "$DIR_LINE" | grep -q '置信度[：: ]*低'; then
-            OVERSEAS_CONFIDENCE="低"
-        else
-            OVERSEAS_CONFIDENCE="中"
-        fi
-        echo "  外盘方向: $OVERSEAS_DIRECTION | 置信度: $OVERSEAS_CONFIDENCE"
+    # 2026-09-06 v3.5.5: 改用统一提取模块 signal_extract.py（单一事实源）。
+    # 旧版 grep '方向[：:]' 与 LLM 自由写作格式（方向判断：…｜…）不兼容，8/24~9/04 注入失败率≈50%。
+    # 口径: 中性偏多/中性偏空 → 注入中性（与周复盘严格口径一致）
+    SIG_FILE="/root/.openclaw/workspace/projects/overseas-morning-brief/scripts/signal_extract.py"
+    SIG=$(/usr/bin/python3 "$SIG_FILE" "$OVERSEAS_BRIEF" 2>/dev/null || echo "未知|无|none")
+    OVERSEAS_DIRECTION=$(echo "$SIG" | cut -d'|' -f1)
+    OVERSEAS_CONFIDENCE=$(echo "$SIG" | cut -d'|' -f2)
+    SIG_SRC=$(echo "$SIG" | cut -d'|' -f3)
+    if [ "$OVERSEAS_DIRECTION" = "未知" ]; then
+        OVERSEAS_DIRECTION=""
+        echo "  ⚠️ 未能从外盘研判提取方向信号 (来源=$SIG_SRC)，将不使用外盘上下文"
     else
-        echo "  ⚠️ 未能从外盘研判提取方向信号，将不使用外盘上下文"
+        echo "  外盘方向: $OVERSEAS_DIRECTION | 置信度: $OVERSEAS_CONFIDENCE | 来源: $SIG_SRC"
     fi
 else
     echo "[0/Z] 外盘晨间研判文件不存在 (等待 ${OVERSEAS_WAITED}s 后仍无: $OVERSEAS_BRIEF)，跳过外盘信号注入"

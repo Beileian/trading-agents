@@ -15,7 +15,9 @@ from price_fetcher import PriceFetcher
 
 TZ = timezone(timedelta(hours=8))
 PROJECT_DIR = "/root/.openclaw/workspace/projects/trading-agents"
-OPENCLAW_BIN = "/root/.nvm/versions/node/v22.22.0/bin/openclaw"
+# 2026-09-06 修: 版本化硬编码随 nvm 升级失效(v22.22.0→ENOENT)，改 current 软链 + shutil.which 兑底
+import shutil as _shutil
+OPENCLAW_BIN = _shutil.which("openclaw") or "/root/.nvm/current/bin/openclaw"
 
 SIGNALS_FILE = f"{PROJECT_DIR}/reports/trade_signals_{datetime.now(TZ).strftime('%Y%m%d')}.md"
 

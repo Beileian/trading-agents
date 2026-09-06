@@ -33,13 +33,16 @@ if [ ! -f "$ANALYSIS_FILE" ]; then
 fi
 
 # 读取状态文件获取 Rubrics 结果
+# 2026-09-06 v3.5.5 修: 状态文件缺失时不再默认满分10（会掩盖状态断链），改标 n/a
 RUBRIC_TAG=""
 RUBRIC_VERDICT="pass"
-RUBRIC_MIN_SCORE="10"
+RUBRIC_MIN_SCORE="n/a"
 if [ -f "$STATE_FILE" ]; then
     RUBRIC_TAG=$(python3 -c "import json; d=json.load(open('$STATE_FILE')); print(d.get('rubric_tag',''))" 2>/dev/null || echo "")
     RUBRIC_VERDICT=$(python3 -c "import json; d=json.load(open('$STATE_FILE')); print(d.get('rubric_verdict','pass'))" 2>/dev/null || echo "pass")
-    RUBRIC_MIN_SCORE=$(python3 -c "import json; d=json.load(open('$STATE_FILE')); print(d.get('rubric_min_score',10))" 2>/dev/null || echo "10")
+    RUBRIC_MIN_SCORE=$(python3 -c "import json; d=json.load(open('$STATE_FILE')); print(d.get('rubric_min_score','n/a'))" 2>/dev/null || echo "n/a")
+else
+    echo "[WARN] 状态文件不存在: $STATE_FILE — Rubrics 将标 n/a（上游分析链可能断）" >&2
 fi
 
 # 步骤4: 虚拟盘执行（基于今日交易推荐）
@@ -56,13 +59,16 @@ RUBRIC_SCORE_LINE=" · Rubrics ${RUBRIC_MIN_SCORE}"
 echo "# ${RUBRIC_TAG}A股开盘前分析 · $DATE_STR${RUBRIC_SCORE_LINE}" > "$PUSH_FILE"
 echo "" >> "$PUSH_FILE"
 
-# ── 外盘方向信号摘要（引用 morning_brief，不重复研判全文）──
+# ── 外盘方向信号摘要（2026-09-06 v3.5.5: 改用统一提取模块，旧 grep '方向[：:]' 与新格式不兼容）──
 if [ -f "$OVERSEAS_BRIEF" ]; then
-    DIR_LINE=$(grep -m1 '方向[：:]' "$OVERSEAS_BRIEF" 2>/dev/null || echo "")
-    if [ -n "$DIR_LINE" ]; then
+    SIG_FILE="/root/.openclaw/workspace/projects/overseas-morning-brief/scripts/signal_extract.py"
+    SIG=$(/usr/bin/python3 "$SIG_FILE" "$OVERSEAS_BRIEF" 2>/dev/null || echo "未知|无|none")
+    SIG_DIR=$(echo "$SIG" | cut -d'|' -f1)
+    SIG_CONF=$(echo "$SIG" | cut -d'|' -f2)
+    if [ "$SIG_DIR" != "未知" ]; then
         echo "## 🌍 隔夜外盘信号" >> "$PUSH_FILE"
         echo "" >> "$PUSH_FILE"
-        echo "$DIR_LINE" | sed 's/^[#[:space:]]*//' >> "$PUSH_FILE"
+        echo "方向判断：${SIG_DIR}｜置信度：${SIG_CONF}" >> "$PUSH_FILE"
         echo "" >> "$PUSH_FILE"
         HAS_CONTENT=true
     fi
