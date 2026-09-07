@@ -367,7 +367,7 @@ def check_breaches(prices, thresholds, pp_map=None, consistency_gate=1.5):
     return alerts, degraded
 
 
-def check_intraday_anomalies(prices):
+def check_intraday_anomalies(prices, pp_map=None):
     """
     通达信盘中异动信号检测 (P1).
     三组信号：
@@ -375,9 +375,14 @@ def check_intraday_anomalies(prices):
       2. 开盘拉升 — 开盘后价格从开盘点位上涨 > 2% (高开回补创新高)
       3. 尾盘拉升 — 14:50后价格从日内低点拉回 > 1.5%
     返回异动告警列表。
+    2026-09-07 自愈修复 (P0-3): 异动信号此前完全绕过 1.5% 一致性门——solo/冻结源的
+    陈旧价格直接触达推送(09-07 国睿科技开盘价伪信号实证)。新增源质量软门:
+      单独源(unverified/solo, freeze轮数会计入quality)或偏差>1.5% → 不即时推open_rise,
+      改抑制(不生成或标 unsuppressed)；frozen 源不触发任何异动。
     """
     import pandas as pd
     alerts = []
+    suppressed = []
     now = datetime.now(TZ)
     today_str = now.strftime("%Y-%m-%d")
     t = now.time()
@@ -388,6 +393,16 @@ def check_intraday_anomalies(prices):
 
     for name, pdata in prices.items():
         if name not in name_to_code:
+            continue
+        # 2026-09-07: 源质量/一致性门 —— 数据不可信时不产出误报
+        pp = (pp_map or {}).get(name)
+        # solo=未验证, unverified=solo单源, frozen=冻结源; stale=陈旧
+        q = getattr(pp, 'quality', '') or ''
+        dev = getattr(pp, 'deviation_pct', 0.0) or 0.0
+        frozen = getattr(pp, 'frozen', False)
+        # 单源 / 冻结 → 视为数据不可信，异动不触发（防旧价伪异动）
+        if q in ('unverified', 'stale') or frozen or dev > 1.5:
+            suppressed.append({'name': name, 'quality': q, 'frozen': frozen, 'dev': dev})
             continue
         sina_code = name_to_code[name]
         price = pdata.get('price', 0)
@@ -457,6 +472,9 @@ def check_intraday_anomalies(prices):
                     'msg': f"📈 {name} 尾盘拉升+{recovery:.1f}%（低{low:.2f}→{price:.2f}）"
                 })
 
+    if suppressed:
+        print(f"[异动门🚫] 抑制 {len(suppressed)} 只不可信源异动: " +
+              ";".join(f"{s['name']}({s.get('quality','?')},dev{s.get('dev',0):.1f},fz{s.get('frozen')})" for s in suppressed[:6]))
     return alerts
 
 def dedup_alerts(alerts, slot=None, namespace=""):
@@ -486,7 +504,10 @@ def dedup_alerts(alerts, slot=None, namespace=""):
 
     new_alerts = []
     for a in alerts:
-        key = f"{namespace}{a['name']}_{a['type']}_{slot}|{today}"
+        # 2026-09-07 dedup 改进: key 含价位, 防同源误报刷屏
+        # (8/19 中国长城同日同一支撑位推送 48 次: 旧key只按 type+slot 去重, 价位变即重推)
+        price_key = a.get('level') or a.get('price')
+        key = f"{namespace}{a['name']}_{a['type']}_{price_key}_{slot}|{today}"
         last_ts = state.get(key, {}).get("ts", 0) if isinstance(state.get(key), dict) else 0
         if now - last_ts > 30 * 60:
             state[key] = {"ts": now, "date": today}
@@ -615,7 +636,8 @@ def main():
 
     # 穿越预警 + 源一致性门（偏差>1.5% 降级为状态提示）
     alerts, degraded = check_breaches(prices, thresholds, pp_map=pp_map, consistency_gate=1.5)
-    anomaly_alerts = check_intraday_anomalies(prices)
+    # 2026-09-07 修复: 异动检查接入 pp_map 源质量门（solo/冻结/偏差>1.5% 源不触发异动）
+    anomaly_alerts = check_intraday_anomalies(prices, pp_map=pp_map)
 
     # 噪音控制：异动信号（935/开盘/尾盘）早盘+盘中即时推；午后/尾盘转状态提示合并推送
     hour = now.hour
@@ -638,7 +660,14 @@ def main():
         'source': pp.source, 'source_chain': pp.source_chain,
         'deviation_pct': pp.deviation_pct,
     } for name, pp in pp_map.items()}
-    log_alerts_jsonl(alerts + degraded + anomaly_alerts, source_info)
+    # 2026-09-07 修复(P0-4): 只记实际推送列表(new_*, 已去重)而非 pre-dedup 全量,
+    # 且降级条目标 degraded=True，收盘复盘命中率不再系统性高估。
+    pushed = []
+    for a in new_alerts:
+        pushed.append(dict(a, degraded=False))
+    for d in new_degraded:
+        pushed.append(dict(d, degraded=True))
+    log_alerts_jsonl(pushed, source_info)
 
 if __name__ == '__main__':
     main()

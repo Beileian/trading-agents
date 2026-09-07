@@ -73,10 +73,13 @@ class PriceFetcher:
     """多源实时价格拉取器，含交叉验证和动态切换"""
 
     def __init__(self):
-        self._degraded_sources = {}  # {source: degraded_until_ts}
+        self._freeze_state = self._load_freeze_state()  # 跨运行持久化冻结状态
+        # 2026-09-07 自愈修复: _degraded_sources(源健康哨兵)持久化 —— cron 每5分钟新进程,
+        # 实例级降级窗口跨进程即失忆(「整体冻结→降级30分钟」每轮打印但下轮 T:on 依旧)。
+        # degraded 记入 freeze_state 顶层 degraded:{source:unix_until}, 跨进程生效。
+        self._degraded_sources = dict(self._freeze_state.get("degraded", {}))  # {source: degraded_until_ts}
         self._error_counts = {}      # {source: consecutive_errors}
         self._cross_log = []         # 最近交叉验证记录
-        self._freeze_state = self._load_freeze_state()  # 跨运行持久化冻结状态
 
     # ═══ 腾讯财经 ═══
     def _fetch_tencent(self) -> dict[str, dict]:
@@ -349,17 +352,21 @@ print(json.dumps(results, ensure_ascii=False))
     # ═══ 冻结检测（跨运行持久化） ═══
     def _load_freeze_state(self) -> dict:
         """加载持久化冻结状态。每次 cron 运行是新进程，实例级状态不累积，
-        必须落盘才能跨 5 分钟轮次识别冻结。"""
+        必须落盘才能跨 5 分钟轮次识别冻结。含 degraded(源降级哨兵)。"""
         try:
             if FREEZE_STATE_FILE.exists():
                 with open(FREEZE_STATE_FILE) as f:
-                    return json.load(f)
+                    data = json.load(f)
+                    if isinstance(data, dict):
+                        return data
         except Exception as e:
             print(f"[freeze] 状态加载失败: {e}")
-        return {"tencent": {}, "eastmoney": {}, "sina": {}}
+        return {"tencent": {}, "eastmoney": {}, "sina": {}, "degraded": {}}
 
     def _save_freeze_state(self):
         try:
+            # 同步降级哨兵到持久化: degraded:{source:until_ts} -> 跨 cron 进程生效
+            self._freeze_state["degraded"] = dict(self._degraded_sources)
             FREEZE_STATE_FILE.parent.mkdir(parents=True, exist_ok=True)
             tmp = str(FREEZE_STATE_FILE) + ".tmp"
             with open(tmp, "w") as f:
@@ -399,6 +406,7 @@ print(json.dumps(results, ensure_ascii=False))
         if self._error_counts[source] >= 5:  # 提高到5次（实际处理10个标的时的累积）
             degrade_seconds = 1800  # 30分钟
             self._degraded_sources[source] = time.time() + degrade_seconds
+            self._save_freeze_state()  # 降级哨兵立即落盘, 跨 cron 进程生效
             print(f"[动态切换] {source} 连续{self._error_counts[source]}次异常，降级{degrade_seconds//60}分钟")
             self._error_counts[source] = 0
 
@@ -406,7 +414,10 @@ print(json.dumps(results, ensure_ascii=False))
         if source in self._degraded_sources:
             if time.time() < self._degraded_sources[source]:
                 return True
+            # 降级窗口到期 → 自愈回血: 清哨兵并回落盘
             del self._degraded_sources[source]
+            self._save_freeze_state()
+            print(f"[自愈] {source} 降级窗口结束, 恢复启用")
         return False
 
     # ═══ 主入口 ═══
