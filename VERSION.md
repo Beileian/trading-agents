@@ -1,8 +1,23 @@
 #!/usr/bin/env python3
 """
-金桥量化交易推荐系统 v3.5.6
+金桥量化交易推荐系统 v3.6.0
 
 版本历史:
+  v3.6.0 (2026-09-08): TimesFM 生产链路 2.5 → 3.0 升级（托董 9/08 确认，含 Non-Commercial 许可变更确认）
+    - 背景: TimesFM 3.0 发布（原生多元时序），同日完成 3.0 vs 2.5 留出回测对照（153配对窗口）：
+      3.0 三期限全优——20d MAPE 7.19%→6.44%，方向命中 39.2%→53.6%（McNemar p=0.009 显著），
+      详见 logs/timesfm_3v2_20260908/RESULTS.md。
+    - calibrate_timesfm.py v3.0: TimesFM_2p5_200M_torch.from_pretrained+compile → TimesFM3Forecaster
+      .from_pretrained().predict(return_quantiles=True)；量化分位映射 q_idx0=p10/4=median/8=p90；
+      运行须走 /root/.venv-timesfm3/bin/python（系统 python3 保持 timesfm 2.0.1 供 2.5 回退）；
+      ImportError 时硬退码 2 + 明示解释器要求（禁止静默退化）。
+    - JSON schema 完全兼容旧版（仅新增顶层 model_repo 键），下游 generate_trade_signals 两处
+      (贝叶斯调整/合成判断) + style_rotation_signals + check_data_timeliness 零改动。
+    - analysis_engines.py: timesfm 引擎 probe 改 venv 解释器检测；note 登记 2.5 回退路径。
+    - 验证: 9标的实跑 52s（2.5 约 100s）；时效 rubric pass=10（留出行 60-61 正常）；
+      bayes 消费冒烟 5 标的有值、style_rotation 字段 9/9 有效。
+    - ⚠️ 许可: 3.0 = Google TimesFM Non-Commercial License v1.0（2.5 为 Apache-2.0），
+      任何商用化路径必须先回退 2.5 或取得授权；金桥个人自用经托董确认。
   v3.5.6 (2026-09-07): 盘中预警源健康自愈机制（M3 红队评审确认，托董 9/07 授权）
     - 背景: 09-07 早盘腾讯行情源整体冻结 9:30 集合竞价快照(国睿科技冻在29.40连续10轮,真实跌至28.1),
       6 条'开盘异动'全为方向反了的伪信号(开盘价29.40被当现价,旧开28.14被当现)。

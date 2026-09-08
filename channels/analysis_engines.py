@@ -7,15 +7,15 @@ analysis_engines.py — 技术分析引擎通道文件（方向3：分析技术�
 ANALYSIS_BACKENDS = {
     "timesfm": {
         "priority": 1,
-        "desc": "TimesFM (Google Research)",
+        "desc": "TimesFM 3.0 (Google Research, Non-Commercial License，金桥自用)",
         "type": "deep_learning",
-        "probe": "python3 -c 'import timesfm; print(\"ok\")' 2>/dev/null",
+        "probe": "/root/.venv-timesfm3/bin/python -c 'from timesfm import TimesFM3Forecaster; print(\"ok\")' 2>/dev/null",
         "output": "多步预测 + 置信区间",
         "best_for": ["短期趋势预测", "5/10/20日价格区间"],
-        "failure_mode": "模型加载失败 / GPU 不可用 / huggingface 镜像不可达",
+        "failure_mode": "模型加载失败 / venv 缺失 / huggingface 镜像不可达",
         "degrade_seconds": 7200,
-        "note": "HF_ENDPOINT=https://hf-mirror.com",
-        "requires": "transformers, numpy, pandas"
+        "note": "HF_ENDPOINT=https://hf-mirror.com；3.0 须走 /root/.venv-timesfm3（系统 python3 仍为 timesfm 2.0.1 兼容层）；2.5 回退：git revert v3.6.0 或用 test_timesfm*.py（系统 python3）",
+        "requires": "venv timesfm>=3.0.1, numpy, pandas"
     },
     "bollinger": {
         "priority": 2,
