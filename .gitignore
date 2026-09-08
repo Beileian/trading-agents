@@ -8,3 +8,8 @@ logs/
 /tmp/
 # Secrets
 .env
+ab_test/
+__pycache__/
+*.py[cod]
+.fix_backup_*/
+*.bak_*
