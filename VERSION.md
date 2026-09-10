@@ -1,8 +1,19 @@
 #!/usr/bin/env python3
 """
-金桥量化交易推荐系统 v3.7.1
+金桥量化交易推荐系统 v3.8.0
 
 版本历史:
+  v3.8.0 (2026-09-10): 收盘复盘双通道 P0 热修（全面评审蓝红蓝结论落地，托董 9/10）
+    - 真根因（红蓝两队均未发现，评审者实测确认）: cron PATH=/sbin:/bin:/usr/sbin:/usr/bin 不含 node（node 在 nvm/bin）→ ima_push_closing.sh 内所有 node 调用静默失败 → preflight 空 → 软退出。修复: 脚本头 export PATH 补 nvm/bin。
+    - 状态协议 v3.8.0: stdout 末行必为 IMA_OK|IMA_PENDING|IMA_FAIL 三态；所有软退出前经 _fail() 输出 IMA_FAIL（不再只写 stderr）。
+    - 调用方捕获修复: run_closing_push.sh `2>/dev/null | tail -1`（恒空）→ `| tail -1`（状态已上 stdout）。
+    - 死锁修复: 同名命中(check_repeated_names) 改回读校验，命中报 IMA_OK（原 exit 0 无 stdout → 永远 FAIL）。
+    - 证据落盘: ima_push_err 重定向改 /var/log/closing_review/ima_err_YYYYMMDD.log（原 /tmp 被覆盖/丢失）。
+    - 摘要器: 「→不矛盾：…」矛盾消解结论不再进「关注/风险」节（原自我否定+挤占≤3名额）。
+    - 回指文案: 「次日 X 点前补传」占位符 → 「次日盘前核验并手工补传」（无补传 cron，原为不可兑现承诺）。
+    - 验证: cron 真实 PATH 下 同名/缺文件/全新三分支实测（IMA_OK/IMA_FAIL/IMA_OK）；摘要重生成 280 字、「不矛盾」已滤。
+    - 待办: 补传检查 cron（次日 09:00）单独排期；IMA 测试残留文件 ima_fresh_test_*.md 需在客户端手工删除（API 无删除接口）。
+
   v3.7.1 (2026-09-10): 事件产业链分析 v1.2 — 输出注明信息来源出处（托董 9/10 指令）
     - 来源行: auto 模式标注事件来自哪份外盘晨间研判(文件名+生成时间+简报落款commit); 手动模式标注「未经采集链路核验」。
     - 推演标注: 行情事实(AKShare新浪/Yahoo/CBOE/腾讯交叉) 与 LLM 产业链推理分离声明, 不伪造新闻URL(上游未存原文链接, 反幻觉铁律)。

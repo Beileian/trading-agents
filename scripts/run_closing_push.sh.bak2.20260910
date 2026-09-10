@@ -1,6 +1,6 @@
 #!/bin/bash
 # ============================================================================
-# A股收盘复盘 — 一站式执行+推送脚本（v3.8.0 双通道：群聊摘要 + IMA全文入库）
+# A股收盘复盘 — 一站式执行+推送脚本（v3.7.0 双通道：群聊摘要 + IMA全文入库）
 # 用法: ./run_closing_push.sh
 #
 # v3.7.0 (2026-09-10, 评审整合结论 P0-1/2/3 + P1 落地, 托董确认 IMA路径=我的知识库/投资理财/盘后复盘)
@@ -28,7 +28,7 @@ GROUP_MARK="$LOG_DIR/.pushed_group_${DATE_TAG}"
 IMA_MARK="$LOG_DIR/.ima_${DATE_TAG}"
 exec >> "$LOG_DIR/run_${DATE_TAG}.log" 2>&1
 
-echo "=== A股收盘复盘 $DATE_STR (v3.8.0 双通道) ==="
+echo "=== A股收盘复盘 $DATE_STR (v3.7.0 双通道) ==="
 
 # 失败告警 - 用PUSH_SCRIPT确保存在
 if [ -f "$PUSH_SCRIPT" ]; then
@@ -96,7 +96,7 @@ if [ -f "$REVIEW_FILE" ] && [ -s "$REVIEW_FILE" ]; then
     IMA_STATUS="IMA_FAIL"
     if [ -f "$IMA_PUSH" ]; then
         echo "[5/5] 全文入库 IMA 盘后复盘..."
-        IMA_STATUS=$(bash "$IMA_PUSH" "$REVIEW_FILE" | tail -1)   # v3.8.0: 状态词已改 stdout；stderr 保留到 run log
+        IMA_STATUS=$(bash "$IMA_PUSH" "$REVIEW_FILE" 2>/dev/null | tail -1)
         # 兜底: 若脚本未回echo状态(0), 用是否已有 mark 判定
         case "$IMA_STATUS" in
             IMA_OK)   touch "$IMA_MARK"; echo "  ✅ IMA 已入库+回读可见";;
@@ -117,7 +117,7 @@ if [ -f "$REVIEW_FILE" ] && [ -s "$REVIEW_FILE" ]; then
             elif [ "$IMA_STATUS" = "IMA_PENDING" ]; then
                 sed -i 's#<IMA_STATUS_PENDING>#⚠️ 全文待人工核验位置, 次日可见#g' "$SUMMARY_FILE"
             else
-                sed -i 's#<IMA_STATUS_PENDING>#⚠️ 全文未入库, 次日盘前核验并手工补传#g' "$SUMMARY_FILE"
+                sed -i 's#<IMA_STATUS_PENDING>#⚠️ 全文暂存本地, 次日 X 点前补传 IMA#g' "$SUMMARY_FILE"
             fi
             cat "$SUMMARY_FILE" | python3 "$PUSH_SCRIPT" && touch "$GROUP_MARK"
         else

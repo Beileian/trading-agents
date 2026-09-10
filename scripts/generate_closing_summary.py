@@ -107,7 +107,10 @@ def main():
         m_amb = re.search(r"⚡ 信号矛盾:\s*\n\s*•\s*([^\n]+)", txt)
         m_dom = re.search(r"⚡ 板块联动[^\n]*", txt)
         if m_amb:
-            notes.append("信号矛盾: " + m_amb.group(1).replace("\u2192", "｜").strip()[:100])
+            if "不矛盾" in m_amb.group(1):
+                pass  # v3.8.0: 「→不矛盾：…」是矛盾消解结论, 非风险, 不进「关注/风险」节
+            else:
+                notes.append("信号矛盾: " + m_amb.group(1).replace("\u2192", "｜").strip()[:100])
         elif m_dom:
             notes.append("板块联动: " + m_dom.group(0).split(":")[-1].strip()[:100])
     if not notes:
