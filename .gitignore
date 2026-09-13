@@ -13,3 +13,6 @@ __pycache__/
 *.py[cod]
 .fix_backup_*/
 *.bak_*
+
+# 行情缓存不入库(2026-09-13 嵌套仓排查,可再生数据)
+data/cache/
