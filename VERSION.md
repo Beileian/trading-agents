@@ -1,8 +1,15 @@
 #!/usr/bin/env python3
 """
-金桥量化交易推荐系统 v3.8.0
+金桥量化交易推荐系统 v3.8.1
 
 版本历史:
+  v3.8.1 (2026-09-14): A/B 试点次日验证回写 ab_test_verify.py（托董 9/14 确认）
+    - 背景: 盘中口头复盘误报「10项全对」，实测对账仅 6/10——命中率必须机械回写，禁止凭印象。
+    - 新增 scripts/ab_test_verify.py v1.1: 解析 ab_test/analysis_*.md 趋势判断，双行情源（当日 Sina 实时 / 历史 data/cache 日线 CSV --backfill），按规则（涨/跌 ±0.05% 容差走平、震荡 |pct|≤1%）对账，命中结果回写 results.jsonl 的 check 字段（含逐标的 pct/判定，可审计）。
+    - 防误用护栏: 无参=只验今日条目且需 15:30 后；历史日期必须 --backfill 显式补跑，防旧报告被新行情误判。
+    - crontab 新增工作日 15:35 自动回写（ab_test/daily_run.log）。
+    - 历史 28 个报告日全量 --backfill 回写完成（2026-08-07～09-14）。
+    - 验证: 实跑 9/14 当日 6/10（与人工对账一致）；9/11 缓存 7/10；无参护栏退出码0；28 天汇总 Flash 均 5.5/M3 均 5.6，17/28 天同分。
   v3.8.0 (2026-09-10): 收盘复盘双通道 P0 热修（全面评审蓝红蓝结论落地，托董 9/10）
     - 真根因（红蓝两队均未发现，评审者实测确认）: cron PATH=/sbin:/bin:/usr/sbin:/usr/bin 不含 node（node 在 nvm/bin）→ ima_push_closing.sh 内所有 node 调用静默失败 → preflight 空 → 软退出。修复: 脚本头 export PATH 补 nvm/bin。
     - 状态协议 v3.8.0: stdout 末行必为 IMA_OK|IMA_PENDING|IMA_FAIL 三态；所有软退出前经 _fail() 输出 IMA_FAIL（不再只写 stderr）。
