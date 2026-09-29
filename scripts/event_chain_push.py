@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-事件驱动产业链分析 v1.2
+事件驱动产业链分析 v1.3
 独立脚本，可被 cron 调用或手动触发。
 输入：事件文本（从海外新闻/外盘波动中提取）
 输出：产业链影响分析报告 → 推送到群聊
@@ -10,6 +10,11 @@
   python3 event_chain_push.py --auto  # 自动从海外简报提取事件
 
 版本史:
+  v1.3 (2026-09-29, 全面评审 P0-3): 新增上游新鲜度门禁——auto 模式只接受
+    「当日」morning_brief_<DATE>.md。原先 sorted(glob)[0] 取最新文件，今晨上游失败时
+    会回退到昨日（或更早）简报，把隔夜旧事件当成今晨事件推送给群，且无人察觉。
+    缺失当日简报 → 打印明确原因并 exit 3（真断供可见），不再静默借用旧数据。
+    来源：9/29 全面评审 Refute Pass 发现的共同盲区（上游依赖无任何校验）。
   v1.2 (2026-09-10, 托董指令): 输出注明信息来源出处——
     ①事件事实来源(auto=外盘晨间研判文件+其commit落款+行情数据源; manual=手动输入未核验)
     ②推演来源(产业链映射为 LLM 推理, 非新闻原文引用)
@@ -99,38 +104,35 @@ def format_push(result: dict, source_meta: dict = None) -> str:
     return "\n".join(lines)
 
 
+class UpstreamMissing(Exception):
+    """v1.3: 当日上游简报缺失——真断供，需以非零退出码暴露，不得静默借用旧数据。"""
+
+
 def auto_extract_event():
-    """从最新海外简报中提取关键事件
-    数据源: morning_brief_YYYY-MM-DD.md（盘前 07:55 生成，当前活跃）；
-    兼容旧 overseas_signal_*.md（6月前旧格式）。
-    返回 (event_text, source_meta) 或 (None, None)。v1.2: source_meta 记录简报文件/生成时间/落款供出处标注。"""
+    """从「当日」海外简报中提取关键事件（v1.3 起只认当日，不再回退旧文件）
+    数据源: morning_brief_YYYY-MM-DD.md（盘前 06:3x 生成，当前活跃）。
+    返回 (event_text, source_meta) 或 (None, None)。v1.2: source_meta 记录简报文件/生成时间/落款供出处标注。
+    上游缺失抛 UpstreamMissing（调用方据此 exit 3，不再静默）。"""
     overseas_dir = os.path.join(PROJECT_DIR, "..", "overseas-morning-brief")
     if not os.path.exists(overseas_dir):
         overseas_dir = "/root/.openclaw/workspace/projects/overseas-morning-brief"
 
-    # 主数据源：最新 morning_brief（活跃格式）
+    # 主数据源：当日 morning_brief（活跃格式）
+    # v1.3: 由「最新文件」改为「当日文件」——防止上游失败时用隔夜旧简报生成今日分析
     brief_dir = os.path.join(overseas_dir, "reports")
-    brief_pattern = os.path.join(brief_dir, "morning_brief_*.md")
-    import glob
-    files = sorted(glob.glob(brief_pattern), reverse=True)
+    import datetime as _dt
+    today = _dt.datetime.now(_dt.timezone(_dt.timedelta(hours=8))).strftime("%Y-%m-%d")
+    brief_file = os.path.join(brief_dir, f"morning_brief_{today}.md")
     content = None
     used_file = None
-    if files:
-        with open(files[0]) as f:
+    if os.path.isfile(brief_file):
+        with open(brief_file) as f:
             content = f.read()
-        used_file = files[0]
+        used_file = brief_file
     else:
-        # fallback: 旧 overseas_signal 格式
-        signal_dir = brief_dir if os.path.exists(brief_dir) else overseas_dir
-        pattern = os.path.join(signal_dir, "overseas_signal_*.md")
-        files = sorted(glob.glob(pattern), reverse=True)
-        if not files:
-            pattern2 = os.path.join(PROJECT_DIR, "reports", "overseas_signal_*.md")
-            files = sorted(glob.glob(pattern2), reverse=True)
-        if files:
-            with open(files[0]) as f:
-                content = f.read()
-            used_file = files[0] if files else None
+        print(f"[gate] 当日上游简报缺失: {brief_file}"
+              f"（外盘晨间研判未产出/失败）——不借用旧简报，本次跳过", file=sys.stderr)
+        raise UpstreamMissing(brief_file)
     if not content:
         return None, None
 
@@ -198,7 +200,12 @@ def main():
         event = " ".join(sys.argv[1:])
         source_meta = {"mode": "manual"}
     elif "--auto" in sys.argv:
-        event, source_meta = auto_extract_event()
+        try:
+            event, source_meta = auto_extract_event()
+        except UpstreamMissing as e:
+            # v1.3: 上游断供是「可见故障」而非静默跳过，用非零退出码让 cron/监控看得见
+            print(f"[gate] 跳过本次推送：上游简报缺失 {e}", file=sys.stderr)
+            sys.exit(3)
         if not event:
             print("No significant event found in overseas brief")
             return
