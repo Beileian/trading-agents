@@ -68,6 +68,10 @@ if [ -f "$OVERSEAS_BRIEF" ]; then
     OVERSEAS_DIRECTION=$(echo "$SIG" | cut -d'|' -f1)
     OVERSEAS_CONFIDENCE=$(echo "$SIG" | cut -d'|' -f2)
     SIG_SRC=$(echo "$SIG" | cut -d'|' -f3)
+    # 2026-10-03 托董改进①: 窗口降档标志（节前/节后 → 外盘因子权重降档，避免过度加权）
+    if [ "$OVERSEAS_CONFIDENCE" = "低" ]; then
+        export OVERSEAS_DOWNWEIGHT=1
+    fi
     if [ "$OVERSEAS_DIRECTION" = "未知" ]; then
         OVERSEAS_DIRECTION=""
         echo "  ⚠️ 未能从外盘研判提取方向信号 (来源=$SIG_SRC)，将不使用外盘上下文"
@@ -141,6 +145,11 @@ fi
 if [ -n "$OVERSEAS_DIRECTION" ]; then
     export OVERSEAS_DIRECTION
     export OVERSEAS_CONFIDENCE
+    # 2026-10-03: 置信度「低」（含节前/节后窗口降档）→ 外盘因子权重降档信号
+    if [ "$OVERSEAS_CONFIDENCE" = "低" ]; then
+        export OVERSEAS_DOWNWEIGHT=1
+        echo "  [降档] 外盘置信度=低，OVERSEAS_DOWNWEIGHT=1（节前/节后流动性主导窗口）"
+    fi
 fi
 
 if [ "$GEN_OK" != true ]; then

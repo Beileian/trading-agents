@@ -16,3 +16,5 @@
 {"date": "2026-08-05", "code": "601988", "name": "中国银行", "action": "buy", "shares": 100, "price": 5.82, "amount": 582.0, "commission": 0.15, "stamp_duty": 0, "reason": "估值区间下沿，关注加仓窗口"}
 {"date": "2026-08-05", "code": "601988", "name": "中国银行", "action": "buy", "shares": 100, "price": 5.82, "amount": 582.0, "commission": 0.15, "stamp_duty": 0, "reason": "估值区间下沿，关注加仓窗口"}
 {"date": "2026-08-10", "code": "601988", "name": "中国银行", "action": "sell", "shares": 5500, "price": 5.79, "amount": 31845.0, "commission": 7.96, "stamp_duty": 31.85, "reason": "破位下行，检查基本面是否变化"}
+{"date": "2026-09-23", "code": "600795", "name": "国电电力", "action": "sell", "shares": 6500, "price": 5.19, "amount": 33735.0, "commission": 8.43, "stamp_duty": 33.73, "reason": "压力区间下移，关注5.15能否守住 [复盘:卖出高误判]"}
+{"date": "2026-09-29", "code": "600795", "name": "国电电力", "action": "buy", "shares": 5800, "price": 5.4, "amount": 31320.0, "commission": 7.83, "stamp_duty": 0, "reason": "乖离偏高，追高风险大，等回调至5.24再关注"}

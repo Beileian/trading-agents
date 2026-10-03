@@ -679,6 +679,11 @@ def extract_overseas_direction_value(overseas_text: str | None) -> tuple[int, st
     if env_dir in ('偏多', '偏空', '中性'):
         dir_map = {'偏多': 1, '偏空': -1, '中性': 0}
         conf_val = env_conf if env_conf in ('高', '中', '低') else '中'
+        # 2026-10-03 托董改进①: 节前/节后窗口（置信度=低）→ 外盘因子权重降档，避免过度加权
+        if os.getenv('OVERSEAS_DOWNWEIGHT', '').strip() in ('1', 'true', 'True'):
+            conf_val = '低降档'
+            print(f"  [外盘硬信号] 方向={env_dir} 置信度=低→权重降档0.5（节前/节后流动性主导窗口，OVERSEAS_DOWNWEIGHT=1）")
+            return dir_map[env_dir], conf_val
         print(f"  [外盘硬信号] 方向={env_dir} 置信度={conf_val} (来自环境变量)")
         return dir_map[env_dir], conf_val
 
@@ -1144,10 +1149,14 @@ def build_synthesis_paragraph(mkt_temp, overseas_text, records):
         elif '中性' in s:
             temp_direction = 'neutral'
 
-    # 2. 外盘方向（v3.0: 增加置信度维度）
+    # 2. 外盘方向（v3.0: 增加置信度维度；2026-10-03: 节前/节后窗口置信度低 → 权重降档）
     overseas_direction, overseas_confidence = extract_overseas_direction_value(overseas_text)
     # 高置信度外盘信号 → 在合成判断中权重 x2
-    overseas_weight = 2 if overseas_confidence == '高' else (1.5 if overseas_confidence == '中' else 1)
+    # 「低降档」= 节前/节后流动性主导窗口（托董改进①）：外盘因子权重降至 0.5，避免过度加权
+    if overseas_confidence == '低降档':
+        overseas_weight = 0.5
+    else:
+        overseas_weight = 2 if overseas_confidence == '高' else (1.5 if overseas_confidence == '中' else 1)
 
     # 3. TimesFM 分位：各标的最近一期 P50 相对 latest_close
     cal_dir = os.path.join(PROJECT_DIR, 'logs', 'timesfm_calibration')
